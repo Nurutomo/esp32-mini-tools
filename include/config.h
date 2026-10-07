@@ -11,7 +11,7 @@
 #endif
 #ifndef OLED_I2C_ADDRESS
 // SSD1306 libraries expect a 7-bit address; 0x78 is the 8-bit write address.
-#define OLED_I2C_ADDRESS (0x78 >> 1)
+#define OLED_I2C_ADDRESS 0x78
 #endif
 
 static constexpr uint8_t OLED_WIDTH = 128;
