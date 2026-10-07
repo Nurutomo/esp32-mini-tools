@@ -25,7 +25,12 @@ jobs:
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
       - name: Build firmware
-        run: pio run
+        run: >-
+          pio run
+          -e esp32-c3-supermini
+          -e esp32-devkit
+          -e esp32-devkit-classic-bt
+          -e esp32-s3-devkit
       - name: Prepare web flasher
         shell: bash
         env:
