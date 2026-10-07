@@ -28,7 +28,8 @@
     button, esp-web-install-button { margin-top:12px; }
     button { border:0; border-radius:5px; background:var(--green); color:#fff; font:600 14px Manrope,sans-serif; padding:13px 18px; cursor:pointer; }
     button:hover { background:#244a33; }
-    input { width:100%; padding:12px; border:1px solid var(--rule); border-radius:5px; background:#fff9; font:14px Manrope,sans-serif; }
+    input, select { width:100%; padding:12px; border:1px solid var(--rule); border-radius:5px; background:#fff9; font:14px Manrope,sans-serif; }
+    label { display:block; margin:12px 0 6px; font-size:13px; font-weight:700; }
     .status { min-height:22px; font:12px 'DM Mono',monospace; color:var(--green); }
     code { font:12px 'DM Mono',monospace; background:#e4dece; padding:2px 5px; }
     footer { margin-top:22px; font:11px 'DM Mono',monospace; color:#77796d; }
@@ -37,31 +38,49 @@
 </head>
 <body>
 <main>
-  <header><span>ESP32-C3 / Fieldnote</span><span>128 × 64 · BLE</span></header>
+  <header><span>ESP32 / Fieldnote</span><span>128 × 64 · Bluetooth</span></header>
   <div class="hero">
-    <div><div class="eyebrow">Tiny display, open channel</div><h1>Send a note<br>to the screen.</h1><p class="intro">Flash the ESP32-C3 SuperMini, then send text over Bluetooth LE to render it on a small I²C OLED.</p></div>
+    <div><div class="eyebrow">Tiny display, open channel</div><h1>Send a note<br>to the screen.</h1><p class="intro">Choose your ESP32 board and OLED pins, flash its matching firmware, then send text over Bluetooth.</p></div>
     <div class="screen"><div class="screen-inner">FIELDNOTE<strong>Ready to receive</strong></div></div>
   </div>
   <div class="grid">
-    <section><div class="number">01 / INSTALL</div><h2>Flash firmware</h2><p>Connect the ESP32-C3 by USB. Use a Chromium browser on HTTPS or localhost.</p><esp-web-install-button manifest="./firmware/manifest.json"></esp-web-install-button><div class="status" id="flash-status">Firmware is built and published by GitHub Actions.</div></section>
-    <section><div class="number">02 / SEND</div><h2>Write over BLE</h2><p>Connect to <code>ESP32-C3-OLED</code>. Text is sent as UTF-8 to the device's write characteristic.</p><input id="message" maxlength="20" value="Hello from the browser" aria-label="Text to display"><button id="connect">Connect to display</button> <button id="send" disabled>Send note</button><div class="status" id="ble-status">Bluetooth requires a supported Chromium browser and HTTPS.</div></section>
+    <section><div class="number">01 / INSTALL</div><h2>Choose board & pins</h2><p>Each choice installs firmware built for its board and the listed default GPIO pair.</p><label for="board">Board / transport</label><select id="board"><option value="esp32-c3-supermini">ESP32-C3 SuperMini · BLE · SDA 8 / SCL 9</option><option value="esp32-devkit">Classic ESP32 · BLE · SDA 21 / SCL 22</option><option value="esp32-devkit-classic-bt">Classic ESP32 · Bluetooth Classic · SDA 21 / SCL 22</option><option value="esp32-s3-devkit">ESP32-S3 · BLE · SDA 8 / SCL 9</option></select><esp-web-install-button id="installer" manifest="./firmware/esp32-c3-supermini/manifest.json"></esp-web-install-button><div class="status" id="flash-status">Firmware builds publish with the latest commit.</div></section>
+    <section><div class="number">02 / SEND</div><h2>Write over Bluetooth</h2><p id="transport-note">BLE sends UTF-8 text to the device's write characteristic.</p><input id="message" maxlength="20" value="Hello from the browser" aria-label="Text to display"><button id="connect">Connect to display</button> <button id="send" disabled>Send note</button><div class="status" id="ble-status">Bluetooth requires a supported Chromium browser and HTTPS.</div></section>
   </div>
   <footer>BLE service: 8b5d0001-6e8f-4c2a-9b73-6d414c454001 · WRITE: 8b5d0002-6e8f-4c2a-9b73-6d414c454001</footer>
 </main>
 <script>
   const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
   const characteristicUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
+  const boardSelect = document.querySelector('#board');
+  const installer = document.querySelector('#installer');
   const connectButton = document.querySelector('#connect');
   const sendButton = document.querySelector('#send');
   const status = document.querySelector('#ble-status');
   let characteristic;
 
+  boardSelect.addEventListener('change', () => {
+    installer.setAttribute('manifest', './firmware/' + boardSelect.value + '/manifest.json');
+    characteristic = undefined;
+    classicDevice = undefined;
+    sendButton.disabled = true;
+    const isClassicBt = boardSelect.value === 'esp32-devkit-classic-bt';
+    document.querySelector('#connect').textContent = isClassicBt ? 'Classic BT via terminal' : 'Connect to display';
+    document.querySelector('#transport-note').textContent = isClassicBt
+      ? 'Bluetooth Classic firmware accepts newline-terminated serial text. Connect with a Bluetooth serial terminal; browser sending is unavailable.'
+      : 'BLE sends UTF-8 text to the device\'s write characteristic.';
+    connectButton.disabled = isClassicBt;
+    if (isClassicBt) status.textContent = 'Pair with ESP32-OLED and use a Bluetooth serial terminal to send text.';
+    else status.textContent = 'Bluetooth requires a supported Chromium browser and HTTPS.';
+  });
+
   connectButton.addEventListener('click', async () => {
     try {
+      if (boardSelect.value === 'esp32-devkit-classic-bt') throw new Error('Use a Bluetooth Classic serial terminal for this firmware.');
       if (!navigator.bluetooth) throw new Error('Web Bluetooth is unavailable in this browser.');
-      status.textContent = 'Choose ESP32-C3-OLED in the Bluetooth picker...';
+      status.textContent = 'Choose ESP32-OLED in the Bluetooth picker...';
       const device = await navigator.bluetooth.requestDevice({
-        filters: [{ name: 'ESP32-C3-OLED' }], optionalServices: [serviceUuid]
+        filters: [{ name: 'ESP32-OLED' }], optionalServices: [serviceUuid]
       });
       const server = await device.gatt.connect();
       const service = await server.getPrimaryService(serviceUuid);
@@ -72,6 +91,11 @@
       status.textContent = error.message || 'Bluetooth connection failed.';
     }
   });
+
+  boardSelect.dispatchEvent(new Event('change'));
+  fetch('./commit.json').then(response => response.json()).then(({ commit }) => {
+    document.querySelector('header span:last-child').textContent += ' · build ' + commit;
+  }).catch(() => {});
 
   sendButton.addEventListener('click', async () => {
     try {

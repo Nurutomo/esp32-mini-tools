@@ -28,33 +28,42 @@ jobs:
         run: pio run
       - name: Prepare web flasher
         shell: bash
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          env_name=esp32-c3-supermini
-          build_dir=".pio/build/$env_name"
           site_dir="dist"
           mkdir -p "$site_dir/firmware"
           cp web/index.html "$site_dir/index.html"
-          cp "$build_dir/bootloader.bin" "$site_dir/firmware/bootloader.bin"
-          cp "$build_dir/partitions.bin" "$site_dir/firmware/partitions.bin"
-          cp "$build_dir/firmware.bin" "$site_dir/firmware/firmware.bin"
-          cat > "$site_dir/firmware/manifest.json" <<'EOF'
+          printf '{"commit":"%s"}\n' "${BUILD_COMMIT:0:7}" > "$site_dir/commit.json"
+
+          write_manifest() {
+            local env_name="$1" device_name="$2" chip_family="$3"
+            local build_dir=".pio/build/$1" out_dir="dist/firmware/$1"
+            mkdir -p "$out_dir"
+            cp "$build_dir/bootloader.bin" "$out_dir/bootloader.bin"
+            cp "$build_dir/partitions.bin" "$out_dir/partitions.bin"
+            cp "$build_dir/firmware.bin" "$out_dir/firmware.bin"
+            cat > "$out_dir/manifest.json" <<EOF
           {
-            "name": "ESP32-C3 SuperMini OLED BLE",
+            "name": "$device_name",
             "version": "1.0.0",
             "new_install_prompt_erase": true,
-            "builds": [
-              {
-                "chipFamily": "ESP32-C3",
-                "parts": [
-                  { "path": "bootloader.bin", "offset": 0 },
-                  { "path": "partitions.bin", "offset": 32768 },
-                  { "path": "firmware.bin", "offset": 65536 }
-                ]
-              }
-            ]
+            "builds": [{
+              "chipFamily": "$chip_family",
+              "parts": [
+                { "path": "bootloader.bin", "offset": 0 },
+                { "path": "partitions.bin", "offset": 32768 },
+                { "path": "firmware.bin", "offset": 65536 }
+              ]
+            }]
           }
           EOF
+          }
+          write_manifest esp32-c3-supermini "ESP32-C3 SuperMini OLED BLE (GPIO 8/9)" ESP32-C3
+          write_manifest esp32-devkit "Classic ESP32 OLED BLE (GPIO 21/22)" ESP32
+          write_manifest esp32-devkit-classic-bt "Classic ESP32 OLED Bluetooth Classic (GPIO 21/22)" ESP32
+          write_manifest esp32-s3-devkit "ESP32-S3 OLED BLE (GPIO 8/9)" ESP32-S3
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

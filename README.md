@@ -1,6 +1,6 @@
-# ESP32-C3 Mini Tools
+# ESP32 Mini Tools
 
-PlatformIO firmware and a GitHub Pages web flasher for an ESP32-C3 SuperMini with a wired 128x64 SSD1306 I2C OLED. The device advertises a BLE GATT service; write UTF-8 text to its characteristic to display it.
+PlatformIO firmware and a GitHub Pages web flasher for ESP32-C3 SuperMini, classic ESP32, and ESP32-S3 boards with a wired 128x64 SSD1306 I2C OLED. BLE is supported on all listed chips; Bluetooth Classic is additionally available for classic ESP32.
 
 ## Hardware
 
@@ -23,7 +23,7 @@ pio run -t upload
 pio device monitor
 ```
 
-Choose the correct serial port if PlatformIO cannot identify it. On first build, PlatformIO downloads the ESP32 platform and libraries. The configured environment is `esp32-c3-supermini` and uses the `esp32-c3-devkitm-1` PlatformIO board definition.
+Choose the correct serial port if PlatformIO cannot identify it. On first build, PlatformIO downloads the ESP32 platform and libraries. Environments are `esp32-c3-supermini`, `esp32-devkit`, `esp32-devkit-classic-bt`, and `esp32-s3-devkit`. Edit the matching environment's `OLED_SDA_PIN` and `OLED_SCL_PIN` build flags in `platformio.ini` to set pins for a local custom build.
 
 ## BLE text protocol
 
@@ -36,9 +36,9 @@ Use the BLE sender on the Pages site or a BLE GATT client app such as nRF Connec
 
 ## GitHub Pages flasher
 
-The workflow at `.github/workflows/build-and-deploy.yml` builds firmware on pushes to `main` and deploys `web/index.html` plus the ESP32-C3 binaries to GitHub Pages. Enable Pages in repository Settings with **GitHub Actions** as the build/deployment source. After the first successful workflow run, open the Pages URL, connect the board over USB, and install.
+The workflow at `.github/workflows/build-and-deploy.yml` builds firmware on pushes to `main` and publishes a board/transport selector on GitHub Pages. Choices are prebuilt: C3 SuperMini BLE (GPIO 8/9), classic ESP32 BLE or Bluetooth Classic (GPIO 21/22), and ESP32-S3 BLE (GPIO 8/9). The page displays the abbreviated commit used for the deployment. Enable Pages in repository Settings with **GitHub Actions** as the build/deployment source. Connect the board over USB and select its matching image to install.
 
-The generated ESP32-C3 manifest uses bootloader offset `0x0`, partition-table offset `0x8000`, and application offset `0x10000`, matching the standard ESP-IDF/PlatformIO image layout.
+The page cannot compile arbitrary pins: change the environment's pin flags in `platformio.ini` and build locally for other GPIO pairs. Manifests use bootloader offset `0x0`, partition-table offset `0x8000`, and application offset `0x10000`.
 
 ## Notes
 
