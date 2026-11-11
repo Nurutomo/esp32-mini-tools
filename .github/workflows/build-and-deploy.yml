@@ -40,7 +40,8 @@ jobs:
           site_dir="dist"
           mkdir -p "$site_dir/firmware"
           cp web/index.html "$site_dir/index.html"
-          printf '{"commit":"%s"}\n' "${BUILD_COMMIT:0:7}" > "$site_dir/commit.json"
+          build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          printf '{"commit":"%s","builtAt":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" > "$site_dir/commit.json"
 
           write_manifest() {
             local env_name="$1" device_name="$2" chip_family="$3"

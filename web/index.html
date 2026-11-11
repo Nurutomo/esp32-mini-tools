@@ -643,6 +643,7 @@
         <h1>ESP32 Mini Tools</h1>
       </div>
       <span class="brand-badge" id="build-tag">Unified Studio</span>
+      <span class="brand-badge" id="build-time" title="Build Date and Time" style="display: none; background: rgba(59, 130, 246, 0.12); color: var(--accent-light); border-color: rgba(59, 130, 246, 0.3);"></span>
     </div>
 
     <div class="header-actions">
@@ -890,12 +891,19 @@
     </div>
   </main>
 
+  <footer style="max-width: 1400px; margin: 0 auto 32px; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-family: var(--mono-font); color: var(--text-dim); border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 8px;">
+    <span>ESP32 Mini Tools &bull; Single-Connection Web Studio &amp; Flasher</span>
+    <span id="footer-build-info">Build: dev</span>
+  </footer>
+
   <script>
     // --- Unified Serial & Flasher State ---
     let activePort = null;
     let serialReader = null;
     let serialWriter = null;
     let isConnected = false;
+    let isReading = false;
+    let readLoopPromise = null;
     let isFlashing = false;
     let commandHistory = [];
     let historyIndex = -1;
@@ -986,10 +994,21 @@
     }
 
     async function closeSerialReader() {
+      isReading = false;
       if (serialReader) {
         try {
           await serialReader.cancel();
         } catch (_) {}
+      }
+      if (readLoopPromise) {
+        // Await read loop to finish and execute its finally block (reader.releaseLock)
+        await Promise.race([
+          readLoopPromise,
+          new Promise(resolve => setTimeout(resolve, 300))
+        ]);
+        readLoopPromise = null;
+      }
+      if (serialReader) {
         try {
           serialReader.releaseLock();
         } catch (_) {}
@@ -1014,9 +1033,14 @@
 
         await closeSerialReader();
 
-        // If port is already open (e.g. from previous run), close it first so we can configure baud
+        // If port is already open (e.g. from previous run), close it first with safety timeout
         if (port.readable || port.writable) {
-          try { await port.close(); } catch (_) {}
+          try {
+            await Promise.race([
+              port.close(),
+              new Promise(resolve => setTimeout(resolve, 300))
+            ]);
+          } catch (_) {}
         }
 
         const baudRate = parseInt(baudSelect.value, 10);
@@ -1030,7 +1054,8 @@
         appendLog('SYS', `Connected to ${usbId} @ ${baudRate} baud (shared upload & monitor connection).`);
 
         // Start background reading loop
-        readSerialLoop();
+        isReading = true;
+        readLoopPromise = readSerialLoop();
       } catch (err) {
         console.error('Error opening port:', err);
         updateUIConnectionState(false);
@@ -1042,9 +1067,20 @@
       if (!activePort) return;
       try {
         appendLog('SYS', 'Disconnecting serial connection...');
+        isConnected = false;
+        isReading = false;
         await closeSerialReader();
-        if (activePort.readable || activePort.writable) {
-          await activePort.close().catch(() => {});
+
+        if (activePort) {
+          try {
+            // Guarantee port.close() never hangs indefinitely
+            await Promise.race([
+              activePort.close(),
+              new Promise(resolve => setTimeout(resolve, 400))
+            ]);
+          } catch (e) {
+            console.warn('port.close() warning:', e);
+          }
         }
       } catch (err) {
         console.warn('Error during disconnect:', err);
@@ -1059,11 +1095,19 @@
       const decoder = new TextDecoder();
       let buffer = '';
 
-      while (activePort && activePort.readable && isConnected && !isFlashing) {
+      while (isReading && activePort && activePort.readable && !isFlashing) {
+        let reader = null;
         try {
-          serialReader = activePort.readable.getReader();
-          while (true) {
-            const { value, done } = await serialReader.read();
+          reader = activePort.readable.getReader();
+          serialReader = reader;
+        } catch (err) {
+          console.warn('Could not acquire serial reader:', err);
+          break;
+        }
+
+        try {
+          while (isReading && !isFlashing) {
+            const { value, done } = await reader.read();
             if (done) break;
             if (value) {
               const chunk = decoder.decode(value, { stream: true });
@@ -1081,14 +1125,13 @@
             }
           }
         } catch (err) {
-          if (isConnected && !isFlashing) {
-            console.error('Serial read error:', err);
-            appendLog('ERR', `Read error: ${err.message || err}`);
-          }
+          // Expected when reader is cancelled or stream closed
           break;
         } finally {
-          if (serialReader) {
-            try { serialReader.releaseLock(); } catch (_) {}
+          try {
+            reader.releaseLock();
+          } catch (_) {}
+          if (serialReader === reader) {
             serialReader = null;
           }
         }
@@ -1218,9 +1261,15 @@
       try {
         // 1. Release serial reader locks and close port so esptool-js can take exclusive control
         appendLog('SYS', 'Preparing shared port for flashing...');
+        isReading = false;
         await closeSerialReader();
-        if (activePort.readable || activePort.writable) {
-          await activePort.close();
+        if (activePort && (activePort.readable || activePort.writable)) {
+          try {
+            await Promise.race([
+              activePort.close(),
+              new Promise(resolve => setTimeout(resolve, 400))
+            ]);
+          } catch (_) {}
         }
 
         // 2. Fetch manifest
@@ -1324,22 +1373,28 @@
 
     // Connect / Disconnect button
     btnToggleConnect.addEventListener('click', async () => {
-      if (isConnected) {
-        await disconnectSerial();
-      } else {
-        if (!('serial' in navigator)) {
-          alert('Web Serial is only supported in Chromium-based browsers like Chrome or Edge over HTTPS or localhost.');
-          return;
-        }
-        try {
-          const port = await navigator.serial.requestPort();
-          await connectToPort(port);
-        } catch (err) {
-          if (err.name !== 'NotFoundError') {
-            console.error('Port selection error:', err);
-            appendLog('ERR', err.message || 'Port selection cancelled.');
+      if (btnToggleConnect.disabled) return;
+      btnToggleConnect.disabled = true;
+      try {
+        if (isConnected) {
+          await disconnectSerial();
+        } else {
+          if (!('serial' in navigator)) {
+            alert('Web Serial is only supported in Chromium-based browsers like Chrome or Edge over HTTPS or localhost.');
+            return;
+          }
+          try {
+            const port = await navigator.serial.requestPort();
+            await connectToPort(port);
+          } catch (err) {
+            if (err.name !== 'NotFoundError') {
+              console.error('Port selection error:', err);
+              appendLog('ERR', err.message || 'Port selection cancelled.');
+            }
           }
         }
+      } finally {
+        btnToggleConnect.disabled = false;
       }
     });
 
@@ -1363,6 +1418,7 @@
       if (isConnected && activePort && !isFlashing) {
         appendLog('SYS', `Changing monitor baud rate to ${baudSelect.value}...`);
         const currentPort = activePort;
+        isReading = false;
         await closeSerialReader();
         await connectToPort(currentPort);
       }
@@ -1443,10 +1499,26 @@
       });
     });
 
-    // Fetch commit info
-    fetch('./commit.json').then(r => r.json()).then(({ commit }) => {
-      if (commit) document.querySelector('#build-tag').textContent = `rev ${commit}`;
-    }).catch(() => {});
+    // Fetch commit and build timestamp info
+    fetch('./commit.json')
+      .then(r => r.json())
+      .then(({ commit, builtAt }) => {
+        if (commit) {
+          document.querySelector('#build-tag').textContent = `rev ${commit}`;
+        }
+        if (builtAt) {
+          const buildTimeEl = document.querySelector('#build-time');
+          if (buildTimeEl) {
+            buildTimeEl.textContent = `Build: ${builtAt}`;
+            buildTimeEl.style.display = 'inline-flex';
+          }
+          const footerBuildEl = document.querySelector('#footer-build-info');
+          if (footerBuildEl) {
+            footerBuildEl.textContent = `Build: ${builtAt} (${commit ? 'rev ' + commit : ''})`;
+          }
+        }
+      })
+      .catch(() => {});
 
     // --- Web Bluetooth Companion Implementation ---
     const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
