@@ -48,20 +48,28 @@ void setBtMessage(const char* msg, size_t len) {
   btMessage[count] = '\0';
   btNewMessage = true;
   portEXIT_CRITICAL(&btMux);
-  Serial.printf("[BT RX] %s\n", btMessage);
+  if (Serial.availableForWrite() > 0) {
+    Serial.printf("[BT RX] %s\n", btMessage);
+  }
 }
 
 #if !defined(USE_CLASSIC_BT) || !defined(CONFIG_IDF_TARGET_ESP32)
 class ServerCallbacks final : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */) override {
+  void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     btConnected = true;
     btNewMessage = true;
-    Serial.println("[BLE] Client connected.");
+    // Request balanced connection parameters: min 30ms, max 60ms, latency 0, supervision timeout 1800ms
+    pServer->updateConnParams(connInfo.getConnHandle(), 24, 48, 0, 180);
+    if (Serial.availableForWrite() > 0) {
+      Serial.println("[BLE] Client connected.");
+    }
   }
-  void onDisconnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */, int /* reason */) override {
+  void onDisconnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */, int reason) override {
     btConnected = false;
     btNewMessage = true;
-    Serial.println("[BLE] Client disconnected. Restarting advertising...");
+    if (Serial.availableForWrite() > 0) {
+      Serial.printf("[BLE] Client disconnected (reason: 0x%02X). Restarting advertising...\n", reason);
+    }
     NimBLEDevice::startAdvertising();
   }
 };
@@ -84,10 +92,10 @@ void turnLedOn() {
   digitalWrite(LED_PIN, LED_ON);
 }
 
-// Ensure the LED is always turned off before any I2C communication.
-// On ESP32-C3 SuperMini, GPIO 8 is shared between the onboard LED and I2C SDA.
-// Driving the LED LOW grounds the SDA line, causing I2C bus lockup.
+// Ensure the LED is turned off before I2C communication during initial scan.
+// Once OLED is active, blinking is disabled and GPIO 8/9 remain in I2C open-drain mode.
 void prepareForI2C() {
+  if (oledReady) return;
   turnLedOff();
 
 #if defined(CONFIG_IDF_TARGET_ESP32C3)

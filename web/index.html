@@ -1568,7 +1568,7 @@
         const device = await navigator.bluetooth.requestDevice(requestOptions);
         bleDevice = device;
 
-        device.addEventListener('gattserverdisconnected', () => {
+        function onBleDisconnected() {
           bleChar = null;
           btnBleSend.disabled = true;
           btnBleConnect.textContent = 'Connect BLE';
@@ -1576,15 +1576,49 @@
           btnBleConnect.classList.add('btn-secondary');
           bleStatus.textContent = 'Status: BLE device disconnected.';
           appendLog('SYS', 'BLE display disconnected.');
-        });
+        }
 
-        bleStatus.textContent = `Status: Connecting to ${device.name || 'ESP32-OLED'}...`;
-        const server = await device.gatt.connect();
+        device.removeEventListener('gattserverdisconnected', onBleDisconnected);
+        device.addEventListener('gattserverdisconnected', onBleDisconnected);
 
-        bleStatus.textContent = 'Status: Discovering OLED display service...';
-        const service = await server.getPrimaryService(serviceUuid);
-        bleChar = await service.getCharacteristic(characteristicUuid);
+        // Connect with retry: on Windows and Android, the OS BLE stack may disconnect
+        // briefly during initial MTU exchange or connection parameter update.
+        let server = null;
+        let service = null;
+        let char = null;
+        const maxAttempts = 3;
 
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            if (attempt === 1) {
+              bleStatus.textContent = `Status: Connecting to ${device.name || 'ESP32-OLED'}...`;
+            } else {
+              bleStatus.textContent = `Status: Reconnecting GATT server (attempt ${attempt}/${maxAttempts})...`;
+              await new Promise(r => setTimeout(r, 400));
+            }
+
+            server = await device.gatt.connect();
+
+            // Allow the link-layer and GATT server to stabilize MTU and connection parameters
+            await new Promise(r => setTimeout(r, 250));
+
+            if (!device.gatt.connected) {
+              throw new Error('GATT Server disconnected before service discovery.');
+            }
+
+            bleStatus.textContent = 'Status: Discovering OLED display service...';
+            service = await server.getPrimaryService(serviceUuid);
+            char = await service.getCharacteristic(characteristicUuid);
+            break;
+          } catch (connErr) {
+            console.warn(`BLE connection attempt ${attempt} failed:`, connErr);
+            if (attempt === maxAttempts) {
+              throw connErr;
+            }
+          }
+        }
+
+        bleChar = char;
         btnBleSend.disabled = false;
         btnBleConnect.textContent = 'Disconnect BLE';
         btnBleConnect.classList.remove('btn-secondary');
