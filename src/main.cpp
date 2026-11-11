@@ -13,12 +13,21 @@ namespace {
 
 // Bluetooth Constants
 constexpr char kDeviceName[] = "ESP32-OLED";
-constexpr char kServiceUuid[] = "8b5d0001-6e8f-4c2a-9b73-6d414c454001";
-constexpr char kTextCharacteristicUuid[] = "8b5d0002-6e8f-4c2a-9b73-6d414c454001";
 constexpr size_t kMaxBtBytes = 32;
+
+// Nordic UART Service (standard BLE Serial profile recognized by mobile apps like "Serial Bluetooth Terminal", nRF Connect, etc.)
+constexpr char kNordicServiceUuid[] = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+constexpr char kNordicRxUuid[]      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"; // RX: Phone writes to ESP32
+constexpr char kNordicTxUuid[]      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"; // TX: ESP32 notifies Phone
+
+// Legacy custom UUIDs for backwards compatibility
+constexpr char kLegacyServiceUuid[] = "8b5d0001-6e8f-4c2a-9b73-6d414c454001";
+constexpr char kLegacyCharUuid[]    = "8b5d0002-6e8f-4c2a-9b73-6d414c454001";
 
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
 BluetoothSerial bluetoothSerial;
+#else
+NimBLECharacteristic* pTxCharacteristic = nullptr;
 #endif
 
 // LED Logic:
@@ -37,7 +46,11 @@ uint8_t oledAddress = 0;
 
 // Bluetooth State
 portMUX_TYPE btMux = portMUX_INITIALIZER_UNLOCKED;
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+char btMessage[kMaxBtBytes + 1] = "Ready (Classic BT)";
+#else
 char btMessage[kMaxBtBytes + 1] = "Ready (BLE)";
+#endif
 volatile bool btConnected = false;
 volatile bool btNewMessage = false;
 
@@ -53,7 +66,24 @@ void setBtMessage(const char* msg, size_t len) {
   }
 }
 
-#if !defined(USE_CLASSIC_BT) || !defined(CONFIG_IDF_TARGET_ESP32)
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+void sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* /* param */) {
+  if (event == ESP_SPP_SRV_OPEN_EVT) {
+    btConnected = true;
+    btNewMessage = true;
+    if (Serial.availableForWrite() > 0) {
+      Serial.println("[BT Classic] Client connected.");
+    }
+    bluetoothSerial.println("ESP32-OLED Ready!\r\nType text to display on screen.");
+  } else if (event == ESP_SPP_CLOSE_EVT) {
+    btConnected = false;
+    btNewMessage = true;
+    if (Serial.availableForWrite() > 0) {
+      Serial.println("[BT Classic] Client disconnected.");
+    }
+  }
+}
+#else
 class ServerCallbacks final : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     btConnected = true;
@@ -76,8 +106,27 @@ class ServerCallbacks final : public NimBLEServerCallbacks {
 
 class TextCallbacks final : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& /* connInfo */) override {
-    const std::string val = characteristic->getValue();
-    setBtMessage(val.data(), val.size());
+    std::string val = characteristic->getValue();
+    // Trim trailing whitespace & newlines (\r, \n)
+    while (!val.empty() && (val.back() == '\r' || val.back() == '\n' || val.back() == ' ')) {
+      val.pop_back();
+    }
+    size_t start = 0;
+    while (start < val.size() && (val[start] == '\r' || val[start] == '\n' || val[start] == ' ')) {
+      start++;
+    }
+    if (start > 0) {
+      val = val.substr(start);
+    }
+
+    if (!val.empty()) {
+      setBtMessage(val.data(), val.size());
+      if (pTxCharacteristic != nullptr && btConnected) {
+        std::string reply = "OK: " + val + "\r\n";
+        pTxCharacteristic->setValue(reply);
+        pTxCharacteristic->notify();
+      }
+    }
   }
 };
 #endif
@@ -208,23 +257,36 @@ void setup() {
 
   // Initialize Bluetooth transport
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
-  setBtMessage("Ready (Classic BT)", 18);
-  bluetoothSerial.begin(kDeviceName);
-  Serial.printf("[BT] Classic Bluetooth ready as '%s'\n", kDeviceName);
+  bluetoothSerial.register_callback(sppCallback);
+  bluetoothSerial.enableSSP(false, false); // Enable Simple Secure Pairing ("Just Works")
+  bool btStarted = bluetoothSerial.begin(kDeviceName);
+  Serial.printf("[BT] Classic Bluetooth %s as '%s'\n", btStarted ? "started" : "FAILED", kDeviceName);
 #else
-  setBtMessage("Ready (BLE)", 11);
   NimBLEDevice::init(kDeviceName);
   NimBLEServer* server = NimBLEDevice::createServer();
   static ServerCallbacks serverCallbacks;
   server->setCallbacks(&serverCallbacks);
 
-  NimBLEService* service = server->createService(kServiceUuid);
-  NimBLECharacteristic* textChar = service->createCharacteristic(
-      kTextCharacteristicUuid,
-      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::READ);
+  // 1. Nordic UART Service (standard BLE Serial for Serial Bluetooth Terminal / nRF Connect / Web)
+  NimBLEService* nusService = server->createService(kNordicServiceUuid);
+  NimBLECharacteristic* rxChar = nusService->createCharacteristic(
+      kNordicRxUuid,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   static TextCallbacks textCallbacks;
-  textChar->setCallbacks(&textCallbacks);
-  textChar->setValue("Ready");
+  rxChar->setCallbacks(&textCallbacks);
+
+  pTxCharacteristic = nusService->createCharacteristic(
+      kNordicTxUuid,
+      NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
+  pTxCharacteristic->setValue("Ready\r\n");
+
+  // 2. Legacy custom service for backward compatibility
+  NimBLEService* legacyService = server->createService(kLegacyServiceUuid);
+  NimBLECharacteristic* legacyChar = legacyService->createCharacteristic(
+      kLegacyCharUuid,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::READ);
+  legacyChar->setCallbacks(&textCallbacks);
+  legacyChar->setValue("Ready");
 
   // In NimBLE 2.x, start server so services are registered with host
   server->start();
@@ -232,24 +294,44 @@ void setup() {
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->enableScanResponse(true);
   advertising->setName(kDeviceName);
-  advertising->addServiceUUID(kServiceUuid);
+  advertising->addServiceUUID(kNordicServiceUuid);
   bool advStarted = advertising->start();
-  Serial.printf("[BLE] Advertised as '%s' (%s)\n  Service: %s\n  Write  : %s\n",
-                kDeviceName, advStarted ? "STARTED" : "FAILED", kServiceUuid, kTextCharacteristicUuid);
+  Serial.printf("[BLE] Advertised as '%s' (%s)\n  NUS Service: %s\n  RX (Write) : %s\n  TX (Notify): %s\n",
+                kDeviceName, advStarted ? "STARTED" : "FAILED",
+                kNordicServiceUuid, kNordicRxUuid, kNordicTxUuid);
 #endif
 }
 
 void loop() {
   const uint32_t now = millis();
 
-  // Check Bluetooth Classic incoming data if enabled
+  // Check Bluetooth Classic incoming data (non-blocking chunk & line handling)
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
-  if (bluetoothSerial.available()) {
-    String str = bluetoothSerial.readStringUntil('\n');
-    str.trim();
-    if (str.length() > 0) {
-      setBtMessage(str.c_str(), str.length());
+  static char btClassicRxBuf[kMaxBtBytes + 1];
+  static size_t btClassicRxLen = 0;
+  static uint32_t lastBtRxByteMs = 0;
+
+  while (bluetoothSerial.available()) {
+    char c = (char)bluetoothSerial.read();
+    lastBtRxByteMs = now;
+    if (c == '\r' || c == '\n') {
+      if (btClassicRxLen > 0) {
+        btClassicRxBuf[btClassicRxLen] = '\0';
+        setBtMessage(btClassicRxBuf, btClassicRxLen);
+        bluetoothSerial.printf("OK: %s\r\n", btClassicRxBuf);
+        btClassicRxLen = 0;
+      }
+    } else if (btClassicRxLen < kMaxBtBytes) {
+      btClassicRxBuf[btClassicRxLen++] = c;
     }
+  }
+
+  // Handle line without newline (flush after 100ms idle)
+  if (btClassicRxLen > 0 && (now - lastBtRxByteMs >= 100)) {
+    btClassicRxBuf[btClassicRxLen] = '\0';
+    setBtMessage(btClassicRxBuf, btClassicRxLen);
+    bluetoothSerial.printf("OK: %s\r\n", btClassicRxBuf);
+    btClassicRxLen = 0;
   }
 #endif
 
@@ -265,7 +347,7 @@ void loop() {
       oledCycle++;
 
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
-      const char* status = "BT Classic";
+      const char* status = btConnected ? "BT Connected" : "BT Ready (SPP)";
 #else
       const char* status = btConnected ? "BLE Connected" : "BLE Advertising";
 #endif

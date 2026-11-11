@@ -811,6 +811,11 @@
           <div id="ble-status" style="font-family: var(--mono-font); font-size: 11px; color: var(--text-dim);">
             Status: Ready to pair (device: ESP32-OLED)
           </div>
+          <div style="margin-top: 10px; padding: 8px 10px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--text-dim);">
+            <strong style="color: var(--text);">📱 Phone Bluetooth Serial:</strong><br>
+            • <b>BLE (C3, S3, DevKit BLE):</b> In "Serial Bluetooth Terminal" app, tap <i>Devices &rarr; Bluetooth LE</i> &rarr; select <b>ESP32-OLED</b> (Nordic UART auto-detected).<br>
+            • <b>BT Classic (DevKit Classic BT):</b> Pair phone in Android/iOS settings &rarr; open app &rarr; <i>Bluetooth Classic</i> &rarr; select <b>ESP32-OLED</b>.
+          </div>
         </div>
       </details>
     </div>
@@ -1527,10 +1532,15 @@
       .catch(() => {});
 
     // --- Web Bluetooth Companion Implementation ---
-    const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
-    const characteristicUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
+    // Nordic UART Service (standard BLE UART used by Android/iOS Serial Bluetooth Terminal apps)
+    const serviceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+    const characteristicUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // RX: Write to ESP32
+    const txCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // TX: Notify from ESP32
+    const legacyServiceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
+    const legacyCharUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
     let bleDevice = null;
     let bleChar = null;
+    let bleTxChar = null;
 
     async function handleBleConnect() {
       const bleStatus = document.querySelector('#ble-status');
@@ -1554,15 +1564,16 @@
         const requestOptions = (chkAll && chkAll.checked)
           ? {
               acceptAllDevices: true,
-              optionalServices: [serviceUuid]
+              optionalServices: [serviceUuid, legacyServiceUuid]
             }
           : {
               filters: [
                 { name: 'ESP32-OLED' },
                 { namePrefix: 'ESP32' },
-                { services: [serviceUuid] }
+                { services: [serviceUuid] },
+                { services: [legacyServiceUuid] }
               ],
-              optionalServices: [serviceUuid]
+              optionalServices: [serviceUuid, legacyServiceUuid]
             };
 
         const device = await navigator.bluetooth.requestDevice(requestOptions);
@@ -1570,6 +1581,7 @@
 
         function onBleDisconnected() {
           bleChar = null;
+          bleTxChar = null;
           btnBleSend.disabled = true;
           btnBleConnect.textContent = 'Connect BLE';
           btnBleConnect.classList.remove('btn-danger');
@@ -1584,7 +1596,6 @@
         // Connect with retry: on Windows and Android, the OS BLE stack may disconnect
         // briefly during initial MTU exchange or connection parameter update.
         let server = null;
-        let service = null;
         let char = null;
         const maxAttempts = 3;
 
@@ -1607,8 +1618,23 @@
             }
 
             bleStatus.textContent = 'Status: Discovering OLED display service...';
-            service = await server.getPrimaryService(serviceUuid);
-            char = await service.getCharacteristic(characteristicUuid);
+            try {
+              const service = await server.getPrimaryService(serviceUuid);
+              char = await service.getCharacteristic(characteristicUuid);
+              try {
+                const tx = await service.getCharacteristic(txCharacteristicUuid);
+                await tx.startNotifications();
+                tx.addEventListener('characteristicvaluechanged', (e) => {
+                  const reply = new TextDecoder().decode(e.target.value);
+                  appendLog('RX', `[BLE <- OLED] ${reply.trim()}`);
+                });
+                bleTxChar = tx;
+              } catch (_) {}
+            } catch (_) {
+              // Fallback to legacy service if connected to older firmware
+              const legacyService = await server.getPrimaryService(legacyServiceUuid);
+              char = await legacyService.getCharacteristic(legacyCharUuid);
+            }
             break;
           } catch (connErr) {
             console.warn(`BLE connection attempt ${attempt} failed:`, connErr);
@@ -1624,7 +1650,7 @@
         btnBleConnect.classList.remove('btn-secondary');
         btnBleConnect.classList.add('btn-danger');
         bleStatus.textContent = `Status: Connected to ${device.name || 'ESP32-OLED'}!`;
-        appendLog('SYS', `BLE connected to ${device.name || 'ESP32-OLED'}. Ready to send text to OLED display.`);
+        appendLog('SYS', `BLE connected to ${device.name || 'ESP32-OLED'} (Nordic UART). Ready to send text.`);
       } catch (err) {
         if (err.name !== 'NotFoundError') {
           console.error('BLE error:', err);
@@ -1649,7 +1675,11 @@
         const bytes = new TextEncoder().encode(msg);
         if (bytes.length > 32) throw new Error('Text exceeds 32 byte payload limit.');
 
-        await bleChar.writeValueWithoutResponse(bytes);
+        if (bleChar.properties && bleChar.properties.writeWithoutResponse) {
+          await bleChar.writeValueWithoutResponse(bytes);
+        } else {
+          await bleChar.writeValueWithResponse(bytes);
+        }
         bleStatus.textContent = `Status: Sent "${msg}" to OLED display!`;
         appendLog('TX', `[BLE -> OLED] ${msg}`);
       } catch (err) {
