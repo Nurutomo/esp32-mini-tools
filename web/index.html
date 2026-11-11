@@ -3,115 +3,1317 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f0eadb">
-  <title>Fieldnote — ESP32-C3 OLED</title>
+  <meta name="theme-color" content="#0d1117">
+  <title>ESP32 Studio — Flasher & Serial Monitor</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
-    :root { color-scheme: light; --paper:#f0eadb; --ink:#20261f; --green:#315e42; --orange:#d56b42; --rule:rgba(32,38,31,.2); }
-    * { box-sizing:border-box; }
-    body { margin:0; background:var(--paper); color:var(--ink); font-family:Manrope, sans-serif; }
-    main { max-width:1100px; margin:auto; padding:32px clamp(20px,5vw,72px) 70px; }
-    header { display:flex; justify-content:space-between; border-bottom:1px solid var(--rule); padding-bottom:18px; font:12px 'DM Mono',monospace; text-transform:uppercase; letter-spacing:.12em; }
-    .hero { display:grid; grid-template-columns:1.4fr .6fr; gap:40px; align-items:center; padding:64px 0 52px; }
-    .eyebrow { color:var(--green); font:12px 'DM Mono',monospace; text-transform:uppercase; letter-spacing:.16em; }
-    h1 { font-size:clamp(48px,8vw,94px); line-height:.94; letter-spacing:-.075em; margin:18px 0; max-width:750px; }
-    .intro { max-width:550px; font-size:17px; line-height:1.65; color:#55594f; }
-    .screen { background:var(--ink); border-radius:14px; padding:18px; transform:rotate(3deg); box-shadow:12px 16px 0 rgba(49,94,66,.18); }
-    .screen-inner { aspect-ratio:128/64; background:#b8cbb0; display:grid; place-items:center; color:var(--green); font:12px 'DM Mono',monospace; text-align:center; }
-    .screen-inner strong { display:block; font-size:17px; margin-top:8px; }
-    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-    section { border:1px solid var(--rule); border-radius:12px; padding:26px; background:rgba(255,255,255,.25); }
-    .number { font:12px 'DM Mono',monospace; color:var(--orange); }
-    h2 { margin:8px 0; font-size:24px; letter-spacing:-.04em; }
-    p { line-height:1.6; color:#55594f; }
-    button, esp-web-install-button { margin-top:12px; }
-    button { border:0; border-radius:5px; background:var(--green); color:#fff; font:600 14px Manrope,sans-serif; padding:13px 18px; cursor:pointer; }
-    button:hover { background:#244a33; }
-    input, select { width:100%; padding:12px; border:1px solid var(--rule); border-radius:5px; background:#fff9; font:14px Manrope,sans-serif; }
-    label { display:block; margin:12px 0 6px; font-size:13px; font-weight:700; }
-    .status { min-height:22px; font:12px 'DM Mono',monospace; color:var(--green); }
-    code { font:12px 'DM Mono',monospace; background:#e4dece; padding:2px 5px; }
-    footer { margin-top:22px; font:11px 'DM Mono',monospace; color:#77796d; }
-    @media(max-width:720px) { .hero { grid-template-columns:1fr; padding:44px 0 35px; } .screen { max-width:280px; margin:10px auto; } .grid { grid-template-columns:1fr; } }
+    :root {
+      --bg-base: #090d16;
+      --bg-surface: #111827;
+      --bg-surface-elevated: #1f293d;
+      --bg-surface-hover: #26344d;
+      --border-subtle: #1f2a3e;
+      --border-focus: #3b82f6;
+      --text-main: #f3f4f6;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-glow: rgba(37, 99, 235, 0.25);
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.2);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --terminal-bg: #030712;
+      --rx-color: #38bdf8;
+      --tx-color: #34d399;
+      --sys-color: #fbbf24;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --mono-font: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans-font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-family: var(--sans-font);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Top Navigation Bar */
+    header {
+      background: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 12px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #3b82f6, #10b981);
+      border-radius: var(--radius-sm);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 16px;
+      color: white;
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+
+    .brand h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #fff;
+    }
+
+    .brand-badge {
+      font-family: var(--mono-font);
+      font-size: 11px;
+      background: var(--bg-surface-elevated);
+      color: var(--text-muted);
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono-font);
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: all 0.3s ease;
+    }
+
+    .status-pill.connected {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.1);
+      color: #a7f3d0;
+    }
+
+    .status-pill.connected .status-dot {
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+
+    .status-pill.connecting .status-dot {
+      background: var(--warning);
+      animation: pulse 1s infinite alternate;
+    }
+
+    @keyframes pulse {
+      from { opacity: 0.4; }
+      to { opacity: 1; }
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1540px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 440px 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 1040px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: relative;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 14px;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-main);
+    }
+
+    .card-title svg {
+      color: var(--accent);
+    }
+
+    /* Forms & Controls */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    select, input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    select:focus, input[type="text"]:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+      font-family: inherit;
+      text-decoration: none;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed !important;
+      pointer-events: none;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: var(--bg-surface-elevated);
+      color: var(--text-main);
+      border-color: var(--border-subtle);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--bg-surface-hover);
+      border-color: #3b4252;
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .btn-sm {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
+    /* Custom Upload Button Styling for esp-web-install-button */
+    esp-web-install-button {
+      display: block;
+      width: 100%;
+    }
+
+    .btn-upload {
+      width: 100%;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #ffffff;
+      padding: 14px 20px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: var(--radius-md);
+      box-shadow: 0 4px 14px var(--accent-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-upload:hover {
+      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+    }
+
+    .board-spec-box {
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      font-family: var(--mono-font);
+      font-size: 12px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .spec-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .spec-label {
+      color: var(--text-dim);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .spec-value {
+      color: var(--text-main);
+      font-weight: 500;
+    }
+
+    /* Auto-connect Banner */
+    .autoconnect-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #6ee7b7;
+    }
+
+    .autoconnect-badge svg {
+      flex-shrink: 0;
+      color: var(--success);
+    }
+
+    /* Terminal Studio Container */
+    .terminal-card {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 110px);
+      min-height: 580px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .terminal-toolbar {
+      background: var(--bg-surface-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .terminal-toolbar-left,
+    .terminal-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toggle-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-label input[type="checkbox"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Terminal Log Viewport */
+    .terminal-viewport {
+      flex: 1;
+      background: var(--terminal-bg);
+      padding: 16px;
+      overflow-y: auto;
+      font-family: var(--mono-font);
+      font-size: 13px;
+      line-height: 1.6;
+      color: #e2e8f0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      scroll-behavior: smooth;
+    }
+
+    .terminal-viewport::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .terminal-viewport::-webkit-scrollbar-track {
+      background: #030712;
+    }
+
+    .terminal-viewport::-webkit-scrollbar-thumb {
+      background: #1f293d;
+      border-radius: 4px;
+    }
+
+    .terminal-viewport::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+
+    /* Log Line Styling */
+    .log-line {
+      display: flex;
+      gap: 8px;
+      padding: 1px 0;
+    }
+
+    .log-time {
+      color: var(--text-dim);
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .log-tag {
+      font-weight: 500;
+      flex-shrink: 0;
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+
+    .log-tag.rx { color: var(--rx-color); }
+    .log-tag.tx { color: var(--tx-color); font-weight: 700; }
+    .log-tag.sys { color: var(--sys-color); }
+    .log-tag.err { color: var(--danger); font-weight: 700; }
+
+    .log-content {
+      flex: 1;
+    }
+
+    /* Terminal Send Input Bar */
+    .terminal-input-bar {
+      background: var(--bg-surface-elevated);
+      border-top: 1px solid var(--border-subtle);
+      padding: 12px 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .terminal-input-wrapper {
+      position: relative;
+      flex: 1;
+    }
+
+    .terminal-input-wrapper input {
+      padding-left: 32px;
+      font-family: var(--mono-font);
+      background: var(--terminal-bg);
+      border-color: #273549;
+    }
+
+    .prompt-symbol {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+      font-family: var(--mono-font);
+      font-size: 13px;
+      pointer-events: none;
+    }
+
+    .line-ending-select {
+      width: 140px;
+      background: var(--bg-surface);
+      border-color: #273549;
+      font-size: 12px;
+      font-family: var(--mono-font);
+    }
+
+    /* Quick command buttons */
+    .quick-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: #0f1523;
+      border-top: 1px solid var(--border-subtle);
+      overflow-x: auto;
+    }
+
+    .quick-chip {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-family: var(--mono-font);
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+
+    .quick-chip:hover {
+      background: var(--bg-surface-hover);
+      color: var(--text-main);
+      border-color: #3b82f6;
+    }
+
+    /* BLE & Extra Collapsible Section */
+    details.tool-card {
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      background: var(--bg-surface-elevated);
+      overflow: hidden;
+    }
+
+    details.tool-card summary {
+      padding: 12px 16px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-main);
+    }
+
+    details.tool-card[open] summary {
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .tool-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Helper Notes */
+    .info-note {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Modal / Alert Notifications */
+    .alert-banner {
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .alert-banner.warning {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #fde68a;
+    }
   </style>
 </head>
 <body>
-<main>
-  <header><span>ESP32 / Fieldnote</span><span>128 × 64 · Bluetooth</span></header>
-  <div class="hero">
-    <div><div class="eyebrow">Tiny display, open channel</div><h1>Send a note<br>to the screen.</h1><p class="intro">Choose your ESP32 board and OLED pins, flash its matching firmware, then send text over Bluetooth.</p></div>
-    <div class="screen"><div class="screen-inner">FIELDNOTE<strong>Ready to receive</strong></div></div>
-  </div>
-  <div class="grid">
-    <section><div class="number">01 / INSTALL</div><h2>Choose board & pins</h2><p>Each choice installs firmware built for its board and the listed default GPIO pair.</p><label for="board">Board / transport</label><select id="board"><option value="esp32-c3-supermini">ESP32-C3 SuperMini · BLE · SDA 8 / SCL 9</option><option value="esp32-devkit">Classic ESP32 · BLE · SDA 21 / SCL 22</option><option value="esp32-devkit-classic-bt">Classic ESP32 · Bluetooth Classic · SDA 21 / SCL 22</option><option value="esp32-s3-devkit">ESP32-S3 · BLE · SDA 8 / SCL 9</option></select><esp-web-install-button id="installer" manifest="./firmware/esp32-c3-supermini/manifest.json"></esp-web-install-button><div class="status" id="flash-status">Firmware builds publish with the latest commit.</div></section>
-    <section><div class="number">02 / SEND</div><h2>Write over Bluetooth</h2><p id="transport-note">BLE sends UTF-8 text to the device's write characteristic.</p><input id="message" maxlength="20" value="Hello from the browser" aria-label="Text to display"><button id="connect">Connect to display</button> <button id="send" disabled>Send note</button><div class="status" id="ble-status">Bluetooth requires a supported Chromium browser and HTTPS.</div></section>
-  </div>
-  <footer>BLE service: 8b5d0001-6e8f-4c2a-9b73-6d414c454001 · WRITE: 8b5d0002-6e8f-4c2a-9b73-6d414c454001</footer>
-</main>
-<script>
-  const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
-  const characteristicUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
-  const boardSelect = document.querySelector('#board');
-  const installer = document.querySelector('#installer');
-  const connectButton = document.querySelector('#connect');
-  const sendButton = document.querySelector('#send');
-  const status = document.querySelector('#ble-status');
-  let characteristic;
 
-  boardSelect.addEventListener('change', () => {
-    installer.setAttribute('manifest', './firmware/' + boardSelect.value + '/manifest.json');
-    characteristic = undefined;
-    classicDevice = undefined;
-    sendButton.disabled = true;
-    const isClassicBt = boardSelect.value === 'esp32-devkit-classic-bt';
-    document.querySelector('#connect').textContent = isClassicBt ? 'Classic BT via terminal' : 'Connect to display';
-    document.querySelector('#transport-note').textContent = isClassicBt
-      ? 'Bluetooth Classic firmware accepts newline-terminated serial text. Connect with a Bluetooth serial terminal; browser sending is unavailable.'
-      : 'BLE sends UTF-8 text to the device\'s write characteristic.';
-    connectButton.disabled = isClassicBt;
-    if (isClassicBt) status.textContent = 'Pair with ESP32-OLED and use a Bluetooth serial terminal to send text.';
-    else status.textContent = 'Bluetooth requires a supported Chromium browser and HTTPS.';
-  });
+  <!-- Navigation -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <h1>ESP32 Mini Tools</h1>
+      </div>
+      <span class="brand-badge" id="build-tag">build main</span>
+    </div>
 
-  connectButton.addEventListener('click', async () => {
-    try {
-      if (boardSelect.value === 'esp32-devkit-classic-bt') throw new Error('Use a Bluetooth Classic serial terminal for this firmware.');
-      if (!navigator.bluetooth) throw new Error('Web Bluetooth is unavailable in this browser.');
-      status.textContent = 'Choose ESP32-OLED in the Bluetooth picker...';
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ name: 'ESP32-OLED' }], optionalServices: [serviceUuid]
+    <div class="header-actions">
+      <div class="status-pill" id="serial-status-pill">
+        <span class="status-dot"></span>
+        <span id="serial-status-text">Disconnected</span>
+      </div>
+
+      <button id="btn-toggle-connect" class="btn btn-primary btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+        </svg>
+        <span id="btn-toggle-connect-label">Connect Port</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Layout -->
+  <main>
+    <!-- Left Column: Firmware Upload & Controls -->
+    <div style="display: flex; flex-direction: column; gap: 20px;">
+
+      <!-- Upload Firmware Card -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Firmware Flasher
+          </div>
+          <span style="font-size: 11px; font-family: var(--mono-font); color: var(--text-dim);">ESP Web Tools</span>
+        </div>
+
+        <div class="form-group">
+          <label for="board-select">Target Board & Hardware Config</label>
+          <select id="board-select">
+            <option value="esp32-c3-supermini">ESP32-C3 SuperMini · BLE (SDA: 8, SCL: 9)</option>
+            <option value="esp32-devkit">Classic ESP32 DevKit · BLE (SDA: 21, SCL: 22)</option>
+            <option value="esp32-devkit-classic-bt">Classic ESP32 DevKit · BT Classic (SDA: 21, SCL: 22)</option>
+            <option value="esp32-s3-devkit">ESP32-S3 DevKit · BLE (SDA: 8, SCL: 9)</option>
+          </select>
+        </div>
+
+        <!-- Board specifications box -->
+        <div class="board-spec-box">
+          <div class="spec-item">
+            <span class="spec-label">Chip Target</span>
+            <span class="spec-value" id="spec-chip">ESP32-C3</span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-label">Status LED</span>
+            <span class="spec-value" id="spec-led">GPIO 8 (Active LOW)</span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-label">I2C OLED</span>
+            <span class="spec-value" id="spec-i2c">SDA: 8 / SCL: 9</span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-label">Flash Offset</span>
+            <span class="spec-value">0x10000 (App)</span>
+          </div>
+        </div>
+
+        <!-- Dedicated Upload Button Container -->
+        <div id="upload-container">
+          <esp-web-install-button id="installer" manifest="./firmware/esp32-c3-supermini/manifest.json">
+            <button slot="activate" class="btn-upload" id="btn-custom-upload">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              Upload Firmware
+            </button>
+            <div slot="unsupported" class="alert-banner warning">
+              ⚠️ Web Serial is not supported. Use Google Chrome or Microsoft Edge.
+            </div>
+            <div slot="not-allowed" class="alert-banner warning">
+              ⚠️ Web Serial requires a secure origin (HTTPS or localhost).
+            </div>
+          </esp-web-install-button>
+        </div>
+
+        <p class="info-note" id="flasher-status-note">
+          Clicking Upload will automatically pause the serial monitor to grant the flasher exclusive access, then re-open it when done.
+        </p>
+      </section>
+
+      <!-- Serial Connection & Hardware Control Card -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/>
+              <line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+            Port & Hardware Control
+          </div>
+        </div>
+
+        <!-- Auto-connect info banner -->
+        <div class="autoconnect-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          <div>
+            <strong>Seamless Auto-Connect</strong>
+            <div style="font-size: 11px; opacity: 0.85; margin-top: 1px;">
+              Pairs once. Automatically reconnects on USB plug-in or reload without asking.
+            </div>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <label for="baud-select">Baud Rate</label>
+            <select id="baud-select">
+              <option value="9600">9600</option>
+              <option value="19200">19200</option>
+              <option value="38400">38400</option>
+              <option value="57600">57600</option>
+              <option value="115200" selected>115200 (Default)</option>
+              <option value="230400">230400</option>
+              <option value="460800">460800</option>
+              <option value="921600">921600</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>ESP32 Hardware</label>
+            <button id="btn-hw-reset" class="btn btn-secondary" style="height: 40px; margin-top: auto;" title="Toggles RTS line to reset chip">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+              </svg>
+              Reset Chip (RTS)
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bluetooth (BLE) Companion Card -->
+      <details class="tool-card">
+        <summary>
+          <span>Bluetooth (BLE) Display Controller</span>
+          <span style="font-family: var(--mono-font); font-size: 11px; color: var(--accent);">OLED Text</span>
+        </summary>
+        <div class="tool-body">
+          <p class="info-note" id="transport-note">
+            Connect to display via Web Bluetooth and send live text notes to the 128×64 OLED screen.
+          </p>
+          <div class="form-group">
+            <input type="text" id="ble-message" maxlength="20" value="Hello ESP32" placeholder="Max 20 UTF-8 characters">
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="btn-ble-connect" class="btn btn-secondary" style="flex: 1;">Connect BLE</button>
+            <button id="btn-ble-send" class="btn btn-primary" style="flex: 1;" disabled>Send Note</button>
+          </div>
+          <div id="ble-status" style="font-family: var(--mono-font); font-size: 11px; color: var(--text-dim);">
+            Status: Ready to pair
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- Right Column: Serial Viewer & Send Studio -->
+    <div class="terminal-card">
+
+      <!-- Toolbar -->
+      <div class="terminal-toolbar">
+        <div class="terminal-toolbar-left">
+          <span style="font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--success);">
+              <polyline points="4 17 10 11 4 5"/>
+              <line x1="12" y1="19" x2="20" y2="19"/>
+            </svg>
+            Serial Monitor
+          </span>
+          <span id="port-details-badge" style="font-family: var(--mono-font); font-size: 11px; color: var(--text-dim); background: var(--bg-surface); padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-subtle);">
+            Not Connected
+          </span>
+        </div>
+
+        <div class="terminal-toolbar-right">
+          <label class="toggle-label">
+            <input type="checkbox" id="chk-autoscroll" checked>
+            Auto-scroll
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" id="chk-timestamps" checked>
+            Timestamps
+          </label>
+          <button id="btn-copy-logs" class="btn btn-secondary btn-sm" title="Copy raw output">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy
+          </button>
+          <button id="btn-clear-logs" class="btn btn-secondary btn-sm" title="Clear console">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Terminal Output Area -->
+      <div class="terminal-viewport" id="terminal-output"></div>
+
+      <!-- Quick Command Bar -->
+      <div class="quick-bar">
+        <span style="font-size: 11px; font-family: var(--mono-font); color: var(--text-dim);">Quick send:</span>
+        <button class="quick-chip" data-cmd="help">help</button>
+        <button class="quick-chip" data-cmd="status">status</button>
+        <button class="quick-chip" data-cmd="ping">ping</button>
+        <button class="quick-chip" data-cmd="info">info</button>
+      </div>
+
+      <!-- Input and Send Controls -->
+      <div class="terminal-input-bar">
+        <div class="terminal-input-wrapper">
+          <span class="prompt-symbol">&gt;</span>
+          <input type="text" id="serial-tx-input" placeholder="Type command to send to ESP32 (press Enter)..." autocomplete="off" spellcheck="false">
+        </div>
+
+        <select id="line-ending-select" class="line-ending-select" title="Line Ending">
+          <option value="\r\n" selected>Both NL &amp; CR (\r\n)</option>
+          <option value="\n">Newline (\n)</option>
+          <option value="\r">Carriage return (\r)</option>
+          <option value="">No line ending</option>
+        </select>
+
+        <button id="btn-send-serial" class="btn btn-primary" title="Send text to ESP32">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+          Send
+        </button>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    // --- State & Variables ---
+    let activePort = null;
+    let serialReader = null;
+    let serialWriter = null;
+    let isConnected = false;
+    let isUploading = false;
+    let commandHistory = [];
+    let historyIndex = -1;
+
+    // Elements
+    const serialStatusPill = document.querySelector('#serial-status-pill');
+    const serialStatusText = document.querySelector('#serial-status-text');
+    const btnToggleConnect = document.querySelector('#btn-toggle-connect');
+    const btnToggleConnectLabel = document.querySelector('#btn-toggle-connect-label');
+    const boardSelect = document.querySelector('#board-select');
+    const installer = document.querySelector('#installer');
+    const btnCustomUpload = document.querySelector('#btn-custom-upload');
+    const baudSelect = document.querySelector('#baud-select');
+    const terminalOutput = document.querySelector('#terminal-output');
+    const serialTxInput = document.querySelector('#serial-tx-input');
+    const btnSendSerial = document.querySelector('#btn-send-serial');
+    const lineEndingSelect = document.querySelector('#line-ending-select');
+    const chkAutoScroll = document.querySelector('#chk-autoscroll');
+    const chkTimestamps = document.querySelector('#chk-timestamps');
+    const btnClearLogs = document.querySelector('#btn-clear-logs');
+    const btnCopyLogs = document.querySelector('#btn-copy-logs');
+    const btnHwReset = document.querySelector('#btn-hw-reset');
+    const portDetailsBadge = document.querySelector('#port-details-badge');
+
+    // Board Hardware Specs mapping
+    const boardSpecs = {
+      'esp32-c3-supermini': { chip: 'ESP32-C3', led: 'GPIO 8 (Active LOW)', i2c: 'SDA: 8 / SCL: 9' },
+      'esp32-devkit': { chip: 'Classic ESP32', led: 'GPIO 2 (Active HIGH)', i2c: 'SDA: 21 / SCL: 22' },
+      'esp32-devkit-classic-bt': { chip: 'Classic ESP32', led: 'GPIO 2 (Active HIGH)', i2c: 'SDA: 21 / SCL: 22' },
+      'esp32-s3-devkit': { chip: 'ESP32-S3', led: 'GPIO 2 (Active HIGH)', i2c: 'SDA: 8 / SCL: 9' }
+    };
+
+    // --- Logging & Terminal Helper Functions ---
+    function getTimestamp() {
+      const now = new Date();
+      return now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    }
+
+    function appendLog(type, text) {
+      const line = document.createElement('div');
+      line.className = 'log-line';
+
+      if (chkTimestamps.checked) {
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'log-time';
+        timeSpan.textContent = `[${getTimestamp()}]`;
+        line.appendChild(timeSpan);
+      }
+
+      const tagSpan = document.createElement('span');
+      tagSpan.className = `log-tag ${type.toLowerCase()}`;
+      tagSpan.textContent = type;
+      line.appendChild(tagSpan);
+
+      const contentSpan = document.createElement('span');
+      contentSpan.className = 'log-content';
+      contentSpan.textContent = text;
+      line.appendChild(contentSpan);
+
+      terminalOutput.appendChild(line);
+
+      if (chkAutoScroll.checked) {
+        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+      }
+    }
+
+    // --- Web Serial Connection Logic ---
+    function updateUIConnectionState(connected, portInfo = null) {
+      isConnected = connected;
+      if (connected) {
+        serialStatusPill.className = 'status-pill connected';
+        serialStatusText.textContent = `Connected (${baudSelect.value} baud)`;
+        btnToggleConnectLabel.textContent = 'Disconnect';
+        btnToggleConnect.classList.replace('btn-primary', 'btn-danger');
+        portDetailsBadge.textContent = portInfo ? `Port: ${portInfo}` : `Connected @ ${baudSelect.value}`;
+        portDetailsBadge.style.color = '#34d399';
+      } else {
+        serialStatusPill.className = 'status-pill';
+        serialStatusText.textContent = 'Disconnected';
+        btnToggleConnectLabel.textContent = 'Connect Port';
+        btnToggleConnect.classList.replace('btn-danger', 'btn-primary');
+        portDetailsBadge.textContent = 'Not Connected';
+        portDetailsBadge.style.color = 'var(--text-dim)';
+      }
+    }
+
+    async function connectToPort(port) {
+      if (!port) return;
+      try {
+        serialStatusPill.className = 'status-pill connecting';
+        serialStatusText.textContent = 'Opening port...';
+
+        const baudRate = parseInt(baudSelect.value, 10);
+        await port.open({ baudRate });
+
+        activePort = port;
+        const info = port.getInfo ? port.getInfo() : {};
+        const usbId = info.usbVendorId ? `VID:0x${info.usbVendorId.toString(16)} PID:0x${info.usbProductId.toString(16)}` : 'USB Serial';
+
+        updateUIConnectionState(true, usbId);
+        appendLog('SYS', `Serial port opened successfully (${usbId} @ ${baudRate} baud).`);
+
+        // Start background reading loop
+        readSerialLoop();
+      } catch (err) {
+        console.error('Error opening port:', err);
+        updateUIConnectionState(false);
+        appendLog('ERR', `Failed to open serial port: ${err.message || err}`);
+      }
+    }
+
+    async function disconnectSerial() {
+      if (!activePort) return;
+      try {
+        appendLog('SYS', 'Disconnecting serial port...');
+        if (serialReader) {
+          await serialReader.cancel().catch(() => {});
+          serialReader = null;
+        }
+        if (serialWriter) {
+          await serialWriter.close().catch(() => {});
+          serialWriter = null;
+        }
+        await activePort.close().catch(() => {});
+      } catch (err) {
+        console.warn('Error during disconnect:', err);
+      } finally {
+        activePort = null;
+        updateUIConnectionState(false);
+        appendLog('SYS', 'Serial port disconnected.');
+      }
+    }
+
+    async function readSerialLoop() {
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (activePort && activePort.readable && isConnected) {
+        try {
+          serialReader = activePort.readable.getReader();
+          while (true) {
+            const { value, done } = await serialReader.read();
+            if (done) break;
+            if (value) {
+              const chunk = decoder.decode(value, { stream: true });
+              buffer += chunk;
+
+              const lines = buffer.split('\n');
+              buffer = lines.pop(); // Retain incomplete trailing line in buffer
+
+              for (const line of lines) {
+                const cleaned = line.replace(/\r$/, '');
+                if (cleaned.length > 0) {
+                  appendLog('RX', cleaned);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          if (isConnected && !isUploading) {
+            console.error('Serial read error:', err);
+            appendLog('ERR', `Read error: ${err.message || err}`);
+          }
+          break;
+        } finally {
+          if (serialReader) {
+            try { serialReader.releaseLock(); } catch (_) {}
+            serialReader = null;
+          }
+        }
+      }
+
+      // Flush any lingering buffer
+      if (buffer.trim().length > 0) {
+        appendLog('RX', buffer.trim());
+      }
+    }
+
+    async function sendSerialText(text) {
+      if (!activePort || !activePort.writable) {
+        appendLog('ERR', 'Cannot send: Serial port is not connected.');
+        return;
+      }
+      if (!text) return;
+
+      try {
+        let ending = lineEndingSelect.value;
+        ending = ending.replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+
+        const encoder = new TextEncoder();
+        serialWriter = activePort.writable.getWriter();
+        await serialWriter.write(encoder.encode(text + ending));
+        appendLog('TX', text);
+      } catch (err) {
+        console.error('Serial send error:', err);
+        appendLog('ERR', `Send error: ${err.message || err}`);
+      } finally {
+        if (serialWriter) {
+          try { serialWriter.releaseLock(); } catch (_) {}
+          serialWriter = null;
+        }
+      }
+    }
+
+    // --- Automatic Connect Logic (No Prompt if already authorized) ---
+    async function initAutoConnect() {
+      if (!('serial' in navigator)) {
+        appendLog('SYS', 'Web Serial API not available in this browser. Please use Chrome, Edge, or Opera.');
+        return;
+      }
+
+      try {
+        // Query ports the user has granted permission to in prior visits
+        const ports = await navigator.serial.getPorts();
+        if (ports && ports.length > 0) {
+          appendLog('SYS', `Discovered ${ports.length} previously authorized device(s). Auto-connecting...`);
+          await connectToPort(ports[0]);
+        } else {
+          appendLog('SYS', 'Ready. Click "Connect Port" once to select your ESP32 (subsequent visits will auto-connect).');
+        }
+      } catch (err) {
+        console.warn('Auto-connect initialization check failed:', err);
+      }
+    }
+
+    // Auto-connect on USB device plug in
+    if ('serial' in navigator) {
+      navigator.serial.addEventListener('connect', async (event) => {
+        appendLog('SYS', 'USB device plugged in. Automatically establishing connection...');
+        if (!isConnected && !isUploading) {
+          await connectToPort(event.port);
+        }
       });
-      const server = await device.gatt.connect();
-      const service = await server.getPrimaryService(serviceUuid);
-      characteristic = await service.getCharacteristic(characteristicUuid);
-      sendButton.disabled = false;
-      status.textContent = 'Connected to ' + device.name;
-    } catch (error) {
-      status.textContent = error.message || 'Bluetooth connection failed.';
+
+      navigator.serial.addEventListener('disconnect', async (event) => {
+        appendLog('SYS', 'USB device was unplugged.');
+        if (activePort === event.port) {
+          await disconnectSerial();
+        }
+      });
     }
-  });
 
-  boardSelect.dispatchEvent(new Event('change'));
-  fetch('./commit.json').then(response => response.json()).then(({ commit }) => {
-    document.querySelector('header span:last-child').textContent += ' · build ' + commit;
-  }).catch(() => {});
+    // --- Dedicated Upload Button Integration ---
+    // Intercept click on the upload button in capture phase to disconnect serial reader first!
+    btnCustomUpload.addEventListener('click', async (e) => {
+      if (isConnected) {
+        appendLog('SYS', 'Pausing serial monitor to grant exclusive USB access to flasher...');
+        isUploading = true;
+        await disconnectSerial();
+      }
+    }, { capture: true });
 
-  sendButton.addEventListener('click', async () => {
-    try {
-      if (!characteristic) throw new Error('Connect to the display first.');
-      const bytes = new TextEncoder().encode(document.querySelector('#message').value);
-      if (bytes.length > 20) throw new Error('Text must be 20 UTF-8 bytes or fewer for the default BLE payload.');
-      await characteristic.writeValueWithoutResponse(bytes);
-      status.textContent = 'Sent ' + bytes.length + ' bytes to the OLED.';
-    } catch (error) {
-      status.textContent = error.message || 'BLE write failed.';
+    // When the ESP Web Tools dialog closes or finishes, re-enable auto-connect
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.removedNodes) {
+          if (node.tagName && node.tagName.toLowerCase().includes('ewt-install-dialog')) {
+            if (isUploading) {
+              isUploading = false;
+              appendLog('SYS', 'Flasher dialog closed. Reconnecting serial monitor in 1.5s...');
+              setTimeout(initAutoConnect, 1500);
+            }
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true });
+
+    // --- Event Listeners ---
+
+    // Connect / Disconnect button
+    btnToggleConnect.addEventListener('click', async () => {
+      if (isConnected) {
+        await disconnectSerial();
+      } else {
+        if (!('serial' in navigator)) {
+          alert('Web Serial is only supported in Chromium-based browsers like Chrome or Edge over HTTPS or localhost.');
+          return;
+        }
+        try {
+          // Explicit prompt for user to authorize device
+          const port = await navigator.serial.requestPort();
+          await connectToPort(port);
+        } catch (err) {
+          if (err.name !== 'NotFoundError') {
+            console.error('Port selection error:', err);
+            appendLog('ERR', err.message || 'Port selection cancelled.');
+          }
+        }
+      }
+    });
+
+    // Board select change
+    boardSelect.addEventListener('change', () => {
+      const val = boardSelect.value;
+      installer.setAttribute('manifest', `./firmware/${val}/manifest.json`);
+
+      const spec = boardSpecs[val] || boardSpecs['esp32-c3-supermini'];
+      document.querySelector('#spec-chip').textContent = spec.chip;
+      document.querySelector('#spec-led').textContent = spec.led;
+      document.querySelector('#spec-i2c').textContent = spec.i2c;
+
+      const isClassicBt = val === 'esp32-devkit-classic-bt';
+      document.querySelector('#transport-note').textContent = isClassicBt
+        ? 'Bluetooth Classic firmware: pair with "ESP32-OLED" in OS settings and send text over Bluetooth serial.'
+        : 'BLE mode: Connect via browser Web Bluetooth and send text directly to the display.';
+      document.querySelector('#btn-ble-connect').disabled = isClassicBt;
+    });
+
+    // Baud rate change
+    baudSelect.addEventListener('change', async () => {
+      if (isConnected && activePort) {
+        appendLog('SYS', `Changing baud rate to ${baudSelect.value}...`);
+        const currentPort = activePort;
+        await disconnectSerial();
+        await connectToPort(currentPort);
+      }
+    });
+
+    // Hardware Reset (RTS signal toggle)
+    btnHwReset.addEventListener('click', async () => {
+      if (!activePort) {
+        appendLog('ERR', 'Cannot reset: device is not connected.');
+        return;
+      }
+      try {
+        appendLog('SYS', 'Asserting hardware reset line (RTS)...');
+        await activePort.setSignals({ requestToSend: true });
+        await new Promise(r => setTimeout(r, 120));
+        await activePort.setSignals({ requestToSend: false });
+        appendLog('SYS', 'Chip reset pulse complete.');
+      } catch (err) {
+        console.error('Reset error:', err);
+        appendLog('ERR', `Reset failed: ${err.message}`);
+      }
+    });
+
+    // Send Serial command
+    function handleSend() {
+      const text = serialTxInput.value;
+      if (!text) return;
+      sendSerialText(text);
+      commandHistory.push(text);
+      historyIndex = commandHistory.length;
+      serialTxInput.value = '';
     }
-  });
 
-  document.querySelector('esp-web-install-button').addEventListener('error', event => {
-    document.querySelector('#flash-status').textContent = event.detail?.message || 'Firmware installation failed.';
-  });
-</script>
+    btnSendSerial.addEventListener('click', handleSend);
+
+    serialTxInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSend();
+      } else if (e.key === 'ArrowUp') {
+        if (historyIndex > 0) {
+          historyIndex--;
+          serialTxInput.value = commandHistory[historyIndex];
+        }
+      } else if (e.key === 'ArrowDown') {
+        if (historyIndex < commandHistory.length - 1) {
+          historyIndex++;
+          serialTxInput.value = commandHistory[historyIndex];
+        } else {
+          historyIndex = commandHistory.length;
+          serialTxInput.value = '';
+        }
+      }
+    });
+
+    // Quick command chips
+    document.querySelectorAll('.quick-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cmd = btn.dataset.cmd;
+        serialTxInput.value = cmd;
+        handleSend();
+      });
+    });
+
+    // Clear logs
+    btnClearLogs.addEventListener('click', () => {
+      terminalOutput.innerHTML = '';
+      appendLog('SYS', 'Console cleared.');
+    });
+
+    // Copy logs
+    btnCopyLogs.addEventListener('click', () => {
+      const text = terminalOutput.innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        const prev = btnCopyLogs.innerHTML;
+        btnCopyLogs.textContent = 'Copied!';
+        setTimeout(() => { btnCopyLogs.innerHTML = prev; }, 1500);
+      });
+    });
+
+    // Fetch commit info
+    fetch('./commit.json').then(r => r.json()).then(({ commit }) => {
+      if (commit) document.querySelector('#build-tag').textContent = `rev ${commit}`;
+    }).catch(() => {});
+
+    // --- Web Bluetooth Companion Implementation ---
+    const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
+    const characteristicUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
+    let bleChar = null;
+
+    document.querySelector('#btn-ble-connect').addEventListener('click', async () => {
+      const bleStatus = document.querySelector('#ble-status');
+      try {
+        if (!navigator.bluetooth) throw new Error('Web Bluetooth is not supported in this browser.');
+        bleStatus.textContent = 'Status: Choosing ESP32-OLED in Bluetooth dialog...';
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'ESP32-OLED' }],
+          optionalServices: [serviceUuid]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(serviceUuid);
+        bleChar = await service.getCharacteristic(characteristicUuid);
+        document.querySelector('#btn-ble-send').disabled = false;
+        bleStatus.textContent = `Status: Connected to ${device.name}`;
+      } catch (err) {
+        bleStatus.textContent = `Status: ${err.message || 'BLE connection failed'}`;
+      }
+    });
+
+    document.querySelector('#btn-ble-send').addEventListener('click', async () => {
+      const bleStatus = document.querySelector('#ble-status');
+      try {
+        if (!bleChar) throw new Error('Bluetooth display not connected.');
+        const msg = document.querySelector('#ble-message').value;
+        const bytes = new TextEncoder().encode(msg);
+        if (bytes.length > 20) throw new Error('Text exceeds 20 byte payload limit.');
+        await bleChar.writeValueWithoutResponse(bytes);
+        bleStatus.textContent = `Status: Sent ${bytes.length} bytes to OLED!`;
+      } catch (err) {
+        bleStatus.textContent = `Status: ${err.message}`;
+      }
+    });
+
+    // Start auto-connection on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      initAutoConnect();
+    });
+  </script>
 </body>
 </html>
