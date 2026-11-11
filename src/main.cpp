@@ -55,10 +55,12 @@ void setBtMessage(const char* msg, size_t len) {
 class ServerCallbacks final : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */) override {
     btConnected = true;
+    btNewMessage = true;
     Serial.println("[BLE] Client connected.");
   }
   void onDisconnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */, int /* reason */) override {
     btConnected = false;
+    btNewMessage = true;
     Serial.println("[BLE] Client disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -122,7 +124,7 @@ uint8_t scanOledAddress() {
   return 0;
 }
 
-void updateOled(const char* condition, uint32_t cycle, bool isLedOn) {
+void updateOled(const char* condition, uint32_t cycle) {
   if (!oledReady) return;
 
   // Turn off LED during I2C communications
@@ -144,10 +146,9 @@ void updateOled(const char* condition, uint32_t cycle, bool isLedOn) {
 
   // Line 2: Chip & Condition
   display.printf("Status : %s\n", condition);
-  display.printf("LED    : %s\n", isLedOn ? "ON" : "OFF");
 
-  // Line 3: Bluetooth status / note
-  display.printf("BT Note: %s\n", currentBt);
+  // Line 3: Bluetooth message received
+  display.printf("BT Msg : %s\n", currentBt);
 
   // Line 4: Diagnostics
   display.printf("Cycle  : #%lu\n", cycle);
@@ -187,10 +188,10 @@ void setup() {
   if (oledAddress != 0) {
     oledReady = true;
     Serial.printf("[I2C] SSD1306 OLED initialized at 0x%02X\n", oledAddress);
-    updateOled("INIT", 0, false);
+    updateOled("INITIALIZED", 0);
   } else {
     oledReady = false;
-    Serial.println("[I2C] OLED not detected; skipping display.");
+    Serial.println("[I2C] OLED not detected; falling back to LED blink.");
   }
 
   // Initialize Bluetooth transport
@@ -202,27 +203,32 @@ void setup() {
   setBtMessage("Ready (BLE)", 11);
   NimBLEDevice::init(kDeviceName);
   NimBLEServer* server = NimBLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks());
+  static ServerCallbacks serverCallbacks;
+  server->setCallbacks(&serverCallbacks);
 
   NimBLEService* service = server->createService(kServiceUuid);
   NimBLECharacteristic* textChar = service->createCharacteristic(
       kTextCharacteristicUuid,
       NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::READ);
-  textChar->setCallbacks(new TextCallbacks());
+  static TextCallbacks textCallbacks;
+  textChar->setCallbacks(&textCallbacks);
   textChar->setValue("Ready");
 
+  // In NimBLE 2.x, start server so services are registered with host
+  server->start();
+
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(kServiceUuid);
+  advertising->enableScanResponse(true);
   advertising->setName(kDeviceName);
-  advertising->start();
-  Serial.printf("[BLE] Advertised as '%s'\n  Service: %s\n  Write  : %s\n",
-                kDeviceName, kServiceUuid, kTextCharacteristicUuid);
+  advertising->addServiceUUID(kServiceUuid);
+  bool advStarted = advertising->start();
+  Serial.printf("[BLE] Advertised as '%s' (%s)\n  Service: %s\n  Write  : %s\n",
+                kDeviceName, advStarted ? "STARTED" : "FAILED", kServiceUuid, kTextCharacteristicUuid);
 #endif
 }
 
 void loop() {
-  static uint32_t cycle = 0;
-  cycle++;
+  const uint32_t now = millis();
 
   // Check Bluetooth Classic incoming data if enabled
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
@@ -235,21 +241,50 @@ void loop() {
   }
 #endif
 
-  // --- LED ON Phase ---
-  // Update OLED condition while LED is safely OFF during I2C communication
-  updateOled("LED ON", cycle, true);
+  // If OLED display is present: update display periodically and DO NOT blink LED
+  if (oledReady) {
+    static uint32_t lastOledUpdateMs = 0;
+    static uint32_t oledCycle = 0;
+    constexpr uint32_t kOledIntervalMs = 500; // Periodic display update every 500ms
 
-  // Turn LED ON for the ON interval
-  turnLedOn();
-  Serial.printf("[%lu ms] Cycle #%lu: LED ON\n", millis(), cycle);
-  delay(kBlinkDelayMs);
+    if (btNewMessage || (now - lastOledUpdateMs >= kOledIntervalMs)) {
+      lastOledUpdateMs = now;
+      btNewMessage = false;
+      oledCycle++;
 
-  // --- LED OFF Phase ---
-  // Turn LED OFF
-  turnLedOff();
-  Serial.printf("[%lu ms] Cycle #%lu: LED OFF\n", millis(), cycle);
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+      const char* status = "BT Classic";
+#else
+      const char* status = btConnected ? "BLE Connected" : "BLE Advertising";
+#endif
+      updateOled(status, oledCycle);
 
-  // Update OLED condition (LED is OFF during I2C communication)
-  updateOled("LED OFF", cycle, false);
-  delay(kBlinkDelayMs);
+      // Periodically log status to Serial Monitor every 2 seconds
+      static uint32_t lastSerialLogMs = 0;
+      if (now - lastSerialLogMs >= 2000) {
+        lastSerialLogMs = now;
+        Serial.printf("[%lu ms] Cycle #%lu: %s | BT Note: %s\n", now, oledCycle, status, btMessage);
+      }
+    }
+  } else {
+    // If no OLED is detected: fallback to blinking the onboard LED periodically
+    static uint32_t lastBlinkMs = 0;
+    static bool ledState = false;
+    static uint32_t blinkCycle = 0;
+
+    if (now - lastBlinkMs >= kBlinkDelayMs) {
+      lastBlinkMs = now;
+      ledState = !ledState;
+      if (ledState) {
+        blinkCycle++;
+        turnLedOn();
+        Serial.printf("[%lu ms] Cycle #%lu: LED ON\n", now, blinkCycle);
+      } else {
+        turnLedOff();
+        Serial.printf("[%lu ms] Cycle #%lu: LED OFF\n", now, blinkCycle);
+      }
+    }
+  }
+
+  delay(10); // Yield to FreeRTOS watchdog & background tasks
 }

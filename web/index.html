@@ -786,24 +786,30 @@
       </section>
 
       <!-- Bluetooth (BLE) Companion Card -->
-      <details class="tool-card">
+      <details class="tool-card" open>
         <summary>
           <span>Bluetooth (BLE) Display Controller</span>
           <span style="font-family: var(--mono-font); font-size: 11px; color: var(--accent);">OLED Text</span>
         </summary>
         <div class="tool-body">
           <p class="info-note" id="transport-note">
-            Connect to display via Web Bluetooth and send live text notes to the 128×64 OLED screen.
+            Connect via Web Bluetooth to send custom text notes directly to the 128&times;64 OLED display.
           </p>
           <div class="form-group">
-            <input type="text" id="ble-message" maxlength="20" value="Hello ESP32" placeholder="Max 20 UTF-8 characters">
+            <label for="ble-message" style="font-size: 11px;">Message to Display on OLED</label>
+            <input type="text" id="ble-message" maxlength="32" value="Hello ESP32" placeholder="Max 32 UTF-8 characters">
           </div>
           <div style="display: flex; gap: 8px;">
             <button id="btn-ble-connect" class="btn btn-secondary" style="flex: 1;">Connect BLE</button>
             <button id="btn-ble-send" class="btn btn-primary" style="flex: 1;" disabled>Send Note</button>
           </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+            <label style="font-size: 11px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-dim); user-select: none;">
+              <input type="checkbox" id="chk-ble-all"> Show all BLE devices (skip name filter)
+            </label>
+          </div>
           <div id="ble-status" style="font-family: var(--mono-font); font-size: 11px; color: var(--text-dim);">
-            Status: Ready to pair
+            Status: Ready to pair (device: ESP32-OLED)
           </div>
         </div>
       </details>
@@ -1523,38 +1529,109 @@
     // --- Web Bluetooth Companion Implementation ---
     const serviceUuid = '8b5d0001-6e8f-4c2a-9b73-6d414c454001';
     const characteristicUuid = '8b5d0002-6e8f-4c2a-9b73-6d414c454001';
+    let bleDevice = null;
     let bleChar = null;
 
-    document.querySelector('#btn-ble-connect').addEventListener('click', async () => {
+    async function handleBleConnect() {
       const bleStatus = document.querySelector('#ble-status');
+      const btnBleConnect = document.querySelector('#btn-ble-connect');
+      const btnBleSend = document.querySelector('#btn-ble-send');
+      const chkAll = document.querySelector('#chk-ble-all');
+
+      if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+        return;
+      }
+
       try {
-        if (!navigator.bluetooth) throw new Error('Web Bluetooth is not supported in this browser.');
-        bleStatus.textContent = 'Status: Choosing ESP32-OLED in Bluetooth dialog...';
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'ESP32-OLED' }],
-          optionalServices: [serviceUuid]
+        if (!navigator.bluetooth) {
+          throw new Error('Web Bluetooth is not supported in this browser (use Chrome or Edge over HTTPS or localhost).');
+        }
+
+        bleStatus.textContent = 'Status: Waiting for device selection...';
+        btnBleConnect.disabled = true;
+
+        const requestOptions = (chkAll && chkAll.checked)
+          ? {
+              acceptAllDevices: true,
+              optionalServices: [serviceUuid]
+            }
+          : {
+              filters: [
+                { name: 'ESP32-OLED' },
+                { namePrefix: 'ESP32' },
+                { services: [serviceUuid] }
+              ],
+              optionalServices: [serviceUuid]
+            };
+
+        const device = await navigator.bluetooth.requestDevice(requestOptions);
+        bleDevice = device;
+
+        device.addEventListener('gattserverdisconnected', () => {
+          bleChar = null;
+          btnBleSend.disabled = true;
+          btnBleConnect.textContent = 'Connect BLE';
+          btnBleConnect.classList.remove('btn-danger');
+          btnBleConnect.classList.add('btn-secondary');
+          bleStatus.textContent = 'Status: BLE device disconnected.';
+          appendLog('SYS', 'BLE display disconnected.');
         });
+
+        bleStatus.textContent = `Status: Connecting to ${device.name || 'ESP32-OLED'}...`;
         const server = await device.gatt.connect();
+
+        bleStatus.textContent = 'Status: Discovering OLED display service...';
         const service = await server.getPrimaryService(serviceUuid);
         bleChar = await service.getCharacteristic(characteristicUuid);
-        document.querySelector('#btn-ble-send').disabled = false;
-        bleStatus.textContent = `Status: Connected to ${device.name}`;
-      } catch (err) {
-        bleStatus.textContent = `Status: ${err.message || 'BLE connection failed'}`;
-      }
-    });
 
-    document.querySelector('#btn-ble-send').addEventListener('click', async () => {
+        btnBleSend.disabled = false;
+        btnBleConnect.textContent = 'Disconnect BLE';
+        btnBleConnect.classList.remove('btn-secondary');
+        btnBleConnect.classList.add('btn-danger');
+        bleStatus.textContent = `Status: Connected to ${device.name || 'ESP32-OLED'}!`;
+        appendLog('SYS', `BLE connected to ${device.name || 'ESP32-OLED'}. Ready to send text to OLED display.`);
+      } catch (err) {
+        if (err.name !== 'NotFoundError') {
+          console.error('BLE error:', err);
+          bleStatus.textContent = `Status: ${err.message || 'BLE connection failed'}`;
+          appendLog('ERR', `BLE error: ${err.message || err}`);
+        } else {
+          bleStatus.textContent = 'Status: Pairing cancelled.';
+        }
+      } finally {
+        btnBleConnect.disabled = false;
+      }
+    }
+
+    async function handleBleSend() {
       const bleStatus = document.querySelector('#ble-status');
       try {
         if (!bleChar) throw new Error('Bluetooth display not connected.');
-        const msg = document.querySelector('#ble-message').value;
+        const input = document.querySelector('#ble-message');
+        const msg = input.value.trim();
+        if (!msg) return;
+
         const bytes = new TextEncoder().encode(msg);
-        if (bytes.length > 20) throw new Error('Text exceeds 20 byte payload limit.');
+        if (bytes.length > 32) throw new Error('Text exceeds 32 byte payload limit.');
+
         await bleChar.writeValueWithoutResponse(bytes);
-        bleStatus.textContent = `Status: Sent ${bytes.length} bytes to OLED!`;
+        bleStatus.textContent = `Status: Sent "${msg}" to OLED display!`;
+        appendLog('TX', `[BLE -> OLED] ${msg}`);
       } catch (err) {
+        console.error('BLE send error:', err);
         bleStatus.textContent = `Status: ${err.message}`;
+        appendLog('ERR', `BLE send error: ${err.message}`);
+      }
+    }
+
+    document.querySelector('#btn-ble-connect').addEventListener('click', handleBleConnect);
+    document.querySelector('#btn-ble-send').addEventListener('click', handleBleSend);
+
+    document.querySelector('#ble-message').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleBleSend();
       }
     });
 
