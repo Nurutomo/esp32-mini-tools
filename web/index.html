@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d1117">
   <title>ESP32 Studio — Flasher & Serial Monitor</title>
-  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -27,6 +26,7 @@
       --success-glow: rgba(16, 185, 129, 0.2);
       --warning: #f59e0b;
       --danger: #ef4444;
+      --flash-tag: #c084fc;
       --terminal-bg: #030712;
       --rx-color: #38bdf8;
       --tx-color: #34d399;
@@ -139,6 +139,18 @@
     .status-pill.connected .status-dot {
       background: var(--success);
       box-shadow: 0 0 8px var(--success);
+    }
+
+    .status-pill.flashing {
+      border-color: rgba(192, 132, 252, 0.4);
+      background: rgba(192, 132, 252, 0.1);
+      color: #e9d5ff;
+    }
+
+    .status-pill.flashing .status-dot {
+      background: var(--flash-tag);
+      animation: pulse 0.6s infinite alternate;
+      box-shadow: 0 0 8px var(--flash-tag);
     }
 
     .status-pill.connecting .status-dot {
@@ -296,9 +308,11 @@
       font-size: 12px;
     }
 
-    /* Custom Upload Button Styling for esp-web-install-button */
-    esp-web-install-button {
-      display: block;
+    /* Dedicated Native Upload Button */
+    .upload-container {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       width: 100%;
     }
 
@@ -318,12 +332,35 @@
       cursor: pointer;
       border: none;
       transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
     }
 
-    .btn-upload:hover {
+    .btn-upload:hover:not(:disabled) {
       background: linear-gradient(135deg, #1d4ed8, #1e40af);
       transform: translateY(-1px);
       box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+    }
+
+    .btn-upload.flashing {
+      background: linear-gradient(135deg, #9333ea, #7e22ce);
+      box-shadow: 0 0 20px rgba(147, 51, 234, 0.4);
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 4px;
+      background: var(--bg-surface-elevated);
+      border-radius: 999px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #10b981);
+      transition: width 0.15s ease;
     }
 
     .board-spec-box {
@@ -474,6 +511,7 @@
     .log-tag.tx { color: var(--tx-color); font-weight: 700; }
     .log-tag.sys { color: var(--sys-color); }
     .log-tag.err { color: var(--danger); font-weight: 700; }
+    .log-tag.flash { color: var(--flash-tag); font-weight: 700; }
 
     .log-content {
       flex: 1;
@@ -581,29 +619,19 @@
       gap: 12px;
     }
 
-    /* Helper Notes */
     .info-note {
       font-size: 12px;
       color: var(--text-muted);
       line-height: 1.5;
     }
-
-    /* Modal / Alert Notifications */
-    .alert-banner {
-      padding: 8px 12px;
-      border-radius: var(--radius-sm);
-      font-size: 12px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .alert-banner.warning {
-      background: rgba(245, 158, 11, 0.15);
-      border: 1px solid rgba(245, 158, 11, 0.3);
-      color: #fde68a;
-    }
   </style>
+
+  <!-- ES Modules for esptool-js -->
+  <script type="module">
+    import { ESPLoader, Transport } from 'https://unpkg.com/esptool-js@0.7.1/bundle.js';
+    window.ESPLoader = ESPLoader;
+    window.Transport = Transport;
+  </script>
 </head>
 <body>
 
@@ -614,7 +642,7 @@
       <div>
         <h1>ESP32 Mini Tools</h1>
       </div>
-      <span class="brand-badge" id="build-tag">build main</span>
+      <span class="brand-badge" id="build-tag">Unified Studio</span>
     </div>
 
     <div class="header-actions">
@@ -649,7 +677,7 @@
             </svg>
             Firmware Flasher
           </div>
-          <span style="font-size: 11px; font-family: var(--mono-font); color: var(--text-dim);">ESP Web Tools</span>
+          <span style="font-size: 11px; font-family: var(--mono-font); color: var(--text-dim);">Unified Port</span>
         </div>
 
         <div class="form-group">
@@ -677,33 +705,28 @@
             <span class="spec-value" id="spec-i2c">SDA: 8 / SCL: 9</span>
           </div>
           <div class="spec-item">
-            <span class="spec-label">Flash Offset</span>
-            <span class="spec-value">0x10000 (App)</span>
+            <span class="spec-label">Upload Rate</span>
+            <span class="spec-value">460800 baud</span>
           </div>
         </div>
 
-        <!-- Dedicated Upload Button Container -->
-        <div id="upload-container">
-          <esp-web-install-button id="installer" manifest="./firmware/esp32-c3-supermini/manifest.json">
-            <button slot="activate" class="btn-upload" id="btn-custom-upload">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              Upload Firmware
-            </button>
-            <div slot="unsupported" class="alert-banner warning">
-              ⚠️ Web Serial is not supported. Use Google Chrome or Microsoft Edge.
-            </div>
-            <div slot="not-allowed" class="alert-banner warning">
-              ⚠️ Web Serial requires a secure origin (HTTPS or localhost).
-            </div>
-          </esp-web-install-button>
+        <!-- Dedicated Upload Button using Same Connection -->
+        <div class="upload-container">
+          <button class="btn-upload" id="btn-upload-firmware">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span id="btn-upload-label">Upload Firmware</span>
+          </button>
+          <div class="progress-bar-container" id="upload-progress-container">
+            <div class="progress-bar-fill" id="upload-progress-fill"></div>
+          </div>
         </div>
 
-        <p class="info-note" id="flasher-status-note">
-          Clicking Upload will automatically pause the serial monitor to grant the flasher exclusive access, then re-open it when done.
+        <p class="info-note">
+          Shares the exact same USB connection as the Serial Monitor. Flashing uses this connection directly without opening a separate dialog, then immediately resumes live serial logs.
         </p>
       </section>
 
@@ -736,7 +759,7 @@
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
           <div class="form-group">
-            <label for="baud-select">Baud Rate</label>
+            <label for="baud-select">Monitor Baud Rate</label>
             <select id="baud-select">
               <option value="9600">9600</option>
               <option value="19200">19200</option>
@@ -868,23 +891,25 @@
   </main>
 
   <script>
-    // --- State & Variables ---
+    // --- Unified Serial & Flasher State ---
     let activePort = null;
     let serialReader = null;
     let serialWriter = null;
     let isConnected = false;
-    let isUploading = false;
+    let isFlashing = false;
     let commandHistory = [];
     let historyIndex = -1;
 
-    // Elements
+    // DOM Elements
     const serialStatusPill = document.querySelector('#serial-status-pill');
     const serialStatusText = document.querySelector('#serial-status-text');
     const btnToggleConnect = document.querySelector('#btn-toggle-connect');
     const btnToggleConnectLabel = document.querySelector('#btn-toggle-connect-label');
     const boardSelect = document.querySelector('#board-select');
-    const installer = document.querySelector('#installer');
-    const btnCustomUpload = document.querySelector('#btn-custom-upload');
+    const btnUploadFirmware = document.querySelector('#btn-upload-firmware');
+    const btnUploadLabel = document.querySelector('#btn-upload-label');
+    const uploadProgressContainer = document.querySelector('#upload-progress-container');
+    const uploadProgressFill = document.querySelector('#upload-progress-fill');
     const baudSelect = document.querySelector('#baud-select');
     const terminalOutput = document.querySelector('#terminal-output');
     const serialTxInput = document.querySelector('#serial-tx-input');
@@ -912,6 +937,7 @@
     }
 
     function appendLog(type, text) {
+      if (!text) return;
       const line = document.createElement('div');
       line.className = 'log-line';
 
@@ -959,11 +985,39 @@
       }
     }
 
+    async function closeSerialReader() {
+      if (serialReader) {
+        try {
+          await serialReader.cancel();
+        } catch (_) {}
+        try {
+          serialReader.releaseLock();
+        } catch (_) {}
+        serialReader = null;
+      }
+      if (serialWriter) {
+        try {
+          await serialWriter.close();
+        } catch (_) {}
+        try {
+          serialWriter.releaseLock();
+        } catch (_) {}
+        serialWriter = null;
+      }
+    }
+
     async function connectToPort(port) {
       if (!port) return;
       try {
         serialStatusPill.className = 'status-pill connecting';
         serialStatusText.textContent = 'Opening port...';
+
+        await closeSerialReader();
+
+        // If port is already open (e.g. from previous run), close it first so we can configure baud
+        if (port.readable || port.writable) {
+          try { await port.close(); } catch (_) {}
+        }
 
         const baudRate = parseInt(baudSelect.value, 10);
         await port.open({ baudRate });
@@ -973,7 +1027,7 @@
         const usbId = info.usbVendorId ? `VID:0x${info.usbVendorId.toString(16)} PID:0x${info.usbProductId.toString(16)}` : 'USB Serial';
 
         updateUIConnectionState(true, usbId);
-        appendLog('SYS', `Serial port opened successfully (${usbId} @ ${baudRate} baud).`);
+        appendLog('SYS', `Connected to ${usbId} @ ${baudRate} baud (shared upload & monitor connection).`);
 
         // Start background reading loop
         readSerialLoop();
@@ -987,22 +1041,17 @@
     async function disconnectSerial() {
       if (!activePort) return;
       try {
-        appendLog('SYS', 'Disconnecting serial port...');
-        if (serialReader) {
-          await serialReader.cancel().catch(() => {});
-          serialReader = null;
+        appendLog('SYS', 'Disconnecting serial connection...');
+        await closeSerialReader();
+        if (activePort.readable || activePort.writable) {
+          await activePort.close().catch(() => {});
         }
-        if (serialWriter) {
-          await serialWriter.close().catch(() => {});
-          serialWriter = null;
-        }
-        await activePort.close().catch(() => {});
       } catch (err) {
         console.warn('Error during disconnect:', err);
       } finally {
         activePort = null;
         updateUIConnectionState(false);
-        appendLog('SYS', 'Serial port disconnected.');
+        appendLog('SYS', 'Disconnected.');
       }
     }
 
@@ -1010,7 +1059,7 @@
       const decoder = new TextDecoder();
       let buffer = '';
 
-      while (activePort && activePort.readable && isConnected) {
+      while (activePort && activePort.readable && isConnected && !isFlashing) {
         try {
           serialReader = activePort.readable.getReader();
           while (true) {
@@ -1021,7 +1070,7 @@
               buffer += chunk;
 
               const lines = buffer.split('\n');
-              buffer = lines.pop(); // Retain incomplete trailing line in buffer
+              buffer = lines.pop(); // Keep partial line in buffer
 
               for (const line of lines) {
                 const cleaned = line.replace(/\r$/, '');
@@ -1032,7 +1081,7 @@
             }
           }
         } catch (err) {
-          if (isConnected && !isUploading) {
+          if (isConnected && !isFlashing) {
             console.error('Serial read error:', err);
             appendLog('ERR', `Read error: ${err.message || err}`);
           }
@@ -1045,8 +1094,7 @@
         }
       }
 
-      // Flush any lingering buffer
-      if (buffer.trim().length > 0) {
+      if (buffer.trim().length > 0 && !isFlashing) {
         appendLog('RX', buffer.trim());
       }
     }
@@ -1085,63 +1133,194 @@
       }
 
       try {
-        // Query ports the user has granted permission to in prior visits
         const ports = await navigator.serial.getPorts();
         if (ports && ports.length > 0) {
-          appendLog('SYS', `Discovered ${ports.length} previously authorized device(s). Auto-connecting...`);
+          appendLog('SYS', `Discovered previously authorized ESP32 port. Auto-connecting...`);
           await connectToPort(ports[0]);
         } else {
-          appendLog('SYS', 'Ready. Click "Connect Port" once to select your ESP32 (subsequent visits will auto-connect).');
+          appendLog('SYS', 'Ready. Click "Connect Port" or "Upload Firmware" to link your ESP32 once.');
         }
       } catch (err) {
         console.warn('Auto-connect initialization check failed:', err);
       }
     }
 
-    // Auto-connect on USB device plug in
+    // Hotplug auto-connect on USB plug-in
     if ('serial' in navigator) {
       navigator.serial.addEventListener('connect', async (event) => {
-        appendLog('SYS', 'USB device plugged in. Automatically establishing connection...');
-        if (!isConnected && !isUploading) {
+        appendLog('SYS', 'ESP32 USB plugged in. Establishing shared connection...');
+        if (!isConnected && !isFlashing) {
           await connectToPort(event.port);
         }
       });
 
       navigator.serial.addEventListener('disconnect', async (event) => {
-        appendLog('SYS', 'USB device was unplugged.');
+        appendLog('SYS', 'ESP32 USB was unplugged.');
         if (activePort === event.port) {
           await disconnectSerial();
         }
       });
     }
 
-    // --- Dedicated Upload Button Integration ---
-    // Intercept click on the upload button in capture phase to disconnect serial reader first!
-    btnCustomUpload.addEventListener('click', async (e) => {
-      if (isConnected) {
-        appendLog('SYS', 'Pausing serial monitor to grant exclusive USB access to flasher...');
-        isUploading = true;
-        await disconnectSerial();
+    // --- Flasher Terminal Adapter for esptool-js ---
+    const espFlasherTerminal = {
+      clean() {},
+      write(text) {
+        if (!text) return;
+        const cleaned = text.replace(/[\r\n]+/g, ' ').trim();
+        if (cleaned) appendLog('FLASH', cleaned);
+      },
+      writeLine(text) {
+        if (!text) return;
+        const cleaned = text.trim();
+        if (cleaned) appendLog('FLASH', cleaned);
       }
-    }, { capture: true });
+    };
 
-    // When the ESP Web Tools dialog closes or finishes, re-enable auto-connect
-    const observer = new MutationObserver((mutations) => {
-      for (const m of mutations) {
-        for (const node of m.removedNodes) {
-          if (node.tagName && node.tagName.toLowerCase().includes('ewt-install-dialog')) {
-            if (isUploading) {
-              isUploading = false;
-              appendLog('SYS', 'Flasher dialog closed. Reconnecting serial monitor in 1.5s...');
-              setTimeout(initAutoConnect, 1500);
-            }
+    // --- Unified Upload Function (Uses the EXACT SAME activePort) ---
+    async function handleUploadFirmware() {
+      if (!('serial' in navigator)) {
+        alert('Web Serial is only supported in Chrome or Edge over HTTPS/localhost.');
+        return;
+      }
+
+      // If not yet connected, prompt once for the port and pair it for both Upload & Serial
+      if (!activePort) {
+        try {
+          appendLog('SYS', 'Prompting for USB port (will be used for both Upload and Serial Monitor)...');
+          activePort = await navigator.serial.requestPort();
+        } catch (err) {
+          if (err.name !== 'NotFoundError') {
+            appendLog('ERR', `Port selection cancelled: ${err.message}`);
           }
+          return;
         }
       }
-    });
-    observer.observe(document.body, { childList: true });
+
+      if (!window.ESPLoader || !window.Transport) {
+        appendLog('ERR', 'esptool-js library is still loading. Please wait 2 seconds and retry.');
+        return;
+      }
+
+      isFlashing = true;
+      btnUploadFirmware.disabled = true;
+      btnUploadFirmware.classList.add('flashing');
+      btnUploadLabel.textContent = 'Preparing Upload...';
+      uploadProgressContainer.style.display = 'block';
+      uploadProgressFill.style.width = '0%';
+      serialStatusPill.className = 'status-pill flashing';
+      serialStatusText.textContent = 'Flashing Firmware...';
+
+      let esploader = null;
+      const targetEnv = boardSelect.value;
+      const manifestUrl = `./firmware/${targetEnv}/manifest.json`;
+
+      try {
+        // 1. Release serial reader locks and close port so esptool-js can take exclusive control
+        appendLog('SYS', 'Preparing shared port for flashing...');
+        await closeSerialReader();
+        if (activePort.readable || activePort.writable) {
+          await activePort.close();
+        }
+
+        // 2. Fetch manifest
+        appendLog('FLASH', `Loading manifest: ${manifestUrl}`);
+        const manifestRes = await fetch(manifestUrl);
+        if (!manifestRes.ok) {
+          throw new Error(`Could not load firmware manifest (${manifestRes.status}). Ensure builds exist.`);
+        }
+        const manifest = await manifestRes.json();
+        const buildInfo = manifest.builds && manifest.builds[0];
+        if (!buildInfo || !buildInfo.parts) {
+          throw new Error('Invalid manifest format: missing builds.parts');
+        }
+
+        appendLog('FLASH', `Target: ${manifest.name || targetEnv} (${buildInfo.chipFamily || 'ESP32'})`);
+
+        // 3. Download binary parts
+        const fileArray = [];
+        let totalBytes = 0;
+        for (const part of buildInfo.parts) {
+          const binUrl = `./firmware/${targetEnv}/${part.path}`;
+          appendLog('FLASH', `Downloading ${part.path}...`);
+          const binRes = await fetch(binUrl);
+          if (!binRes.ok) throw new Error(`Failed to load ${part.path} (${binRes.status})`);
+          const buf = await binRes.arrayBuffer();
+          const data = new Uint8Array(buf);
+          fileArray.push({ data, address: part.offset });
+          totalBytes += data.length;
+          appendLog('FLASH', `✓ ${part.path}: ${data.length.toLocaleString()} bytes @ 0x${part.offset.toString(16)}`);
+        }
+
+        // 4. Initialize esptool Transport with activePort (THE SAME CONNECTION)
+        appendLog('FLASH', 'Connecting to ESP32 ROM bootloader via shared port...');
+        const transport = new window.Transport(activePort, false);
+        esploader = new window.ESPLoader({
+          transport,
+          baudrate: 460800,
+          romBaudrate: 115200,
+          terminal: espFlasherTerminal
+        });
+
+        // 5. Connect and detect chip
+        const detectedChip = await esploader.main();
+        appendLog('FLASH', `Chip verified: ${detectedChip}`);
+
+        // 6. Flash all binary parts
+        appendLog('FLASH', `Writing ${fileArray.length} parts (${totalBytes.toLocaleString()} bytes total)...`);
+        await esploader.writeFlash({
+          fileArray,
+          flashSize: 'keep',
+          eraseAll: false,
+          compress: true,
+          reportProgress: (fileIndex, written, total) => {
+            const partPct = Math.round((written / total) * 100);
+            const partName = buildInfo.parts[fileIndex].path;
+            btnUploadLabel.textContent = `Flashing ${partName} (${partPct}%)`;
+            uploadProgressFill.style.width = `${partPct}%`;
+          }
+        });
+
+        uploadProgressFill.style.width = '100%';
+        appendLog('FLASH', 'Firmware flashed and verified successfully!');
+
+        // 7. Reset the ESP32 chip using hardware RTS
+        appendLog('FLASH', 'Hard resetting chip via RTS...');
+        await esploader.after('hard_reset');
+
+        // 8. Disconnect flasher transport to release activePort
+        await esploader.transport.disconnect();
+        esploader = null;
+
+        appendLog('SYS', 'Flashing complete! Resuming live serial monitor on the same connection...');
+      } catch (err) {
+        console.error('Upload error:', err);
+        appendLog('ERR', `Upload failed: ${err.message || err}`);
+      } finally {
+        if (esploader && esploader.transport) {
+          try { await esploader.transport.disconnect(); } catch (_) {}
+        }
+
+        isFlashing = false;
+        btnUploadFirmware.disabled = false;
+        btnUploadFirmware.classList.remove('flashing');
+        btnUploadLabel.textContent = 'Upload Firmware';
+        setTimeout(() => {
+          uploadProgressContainer.style.display = 'none';
+          uploadProgressFill.style.width = '0%';
+        }, 1000);
+
+        // Immediately reopen the activePort for the Serial Monitor!
+        if (activePort) {
+          await connectToPort(activePort);
+        }
+      }
+    }
 
     // --- Event Listeners ---
+
+    // Dedicated Upload Button
+    btnUploadFirmware.addEventListener('click', handleUploadFirmware);
 
     // Connect / Disconnect button
     btnToggleConnect.addEventListener('click', async () => {
@@ -1153,7 +1332,6 @@
           return;
         }
         try {
-          // Explicit prompt for user to authorize device
           const port = await navigator.serial.requestPort();
           await connectToPort(port);
         } catch (err) {
@@ -1168,8 +1346,6 @@
     // Board select change
     boardSelect.addEventListener('change', () => {
       const val = boardSelect.value;
-      installer.setAttribute('manifest', `./firmware/${val}/manifest.json`);
-
       const spec = boardSpecs[val] || boardSpecs['esp32-c3-supermini'];
       document.querySelector('#spec-chip').textContent = spec.chip;
       document.querySelector('#spec-led').textContent = spec.led;
@@ -1184,18 +1360,18 @@
 
     // Baud rate change
     baudSelect.addEventListener('change', async () => {
-      if (isConnected && activePort) {
-        appendLog('SYS', `Changing baud rate to ${baudSelect.value}...`);
+      if (isConnected && activePort && !isFlashing) {
+        appendLog('SYS', `Changing monitor baud rate to ${baudSelect.value}...`);
         const currentPort = activePort;
-        await disconnectSerial();
+        await closeSerialReader();
         await connectToPort(currentPort);
       }
     });
 
     // Hardware Reset (RTS signal toggle)
     btnHwReset.addEventListener('click', async () => {
-      if (!activePort) {
-        appendLog('ERR', 'Cannot reset: device is not connected.');
+      if (!activePort || isFlashing) {
+        appendLog('ERR', 'Cannot reset: device is not connected or upload in progress.');
         return;
       }
       try {
@@ -1213,7 +1389,7 @@
     // Send Serial command
     function handleSend() {
       const text = serialTxInput.value;
-      if (!text) return;
+      if (!text || isFlashing) return;
       sendSerialText(text);
       commandHistory.push(text);
       historyIndex = commandHistory.length;
@@ -1310,7 +1486,7 @@
       }
     });
 
-    // Start auto-connection on page load
+    // Initialize auto-connection on page load
     window.addEventListener('DOMContentLoaded', () => {
       initAutoConnect();
     });
