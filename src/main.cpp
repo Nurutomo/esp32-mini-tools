@@ -161,6 +161,10 @@ void updateOled(const char* condition, uint32_t cycle) {
 
 void setup() {
   Serial.begin(115200);
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT > 0)
+  // Disable blocking TX timeout on USB CDC so prints never stall loop() when disconnected
+  Serial.setTxTimeoutMs(0);
+#endif
   delay(1000);
 
   // Initialize LED in OFF state
@@ -263,7 +267,9 @@ void loop() {
       static uint32_t lastSerialLogMs = 0;
       if (now - lastSerialLogMs >= 2000) {
         lastSerialLogMs = now;
-        Serial.printf("[%lu ms] Cycle #%lu: %s | BT Note: %s\n", now, oledCycle, status, btMessage);
+        if (Serial.availableForWrite() > 0) {
+          Serial.printf("[%lu ms] Cycle #%lu: %s | BT Note: %s\n", now, oledCycle, status, btMessage);
+        }
       }
     }
   } else {
@@ -278,10 +284,14 @@ void loop() {
       if (ledState) {
         blinkCycle++;
         turnLedOn();
-        Serial.printf("[%lu ms] Cycle #%lu: LED ON\n", now, blinkCycle);
+        if (Serial.availableForWrite() > 0) {
+          Serial.printf("[%lu ms] Cycle #%lu: LED ON\n", now, blinkCycle);
+        }
       } else {
         turnLedOff();
-        Serial.printf("[%lu ms] Cycle #%lu: LED OFF\n", now, blinkCycle);
+        if (Serial.availableForWrite() > 0) {
+          Serial.printf("[%lu ms] Cycle #%lu: LED OFF\n", now, blinkCycle);
+        }
       }
     }
   }
