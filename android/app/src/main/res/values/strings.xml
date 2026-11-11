@@ -28,4 +28,11 @@
 
     <string name="service_foreground_title">ESP32 Maps HUD Active</string>
     <string name="service_foreground_content">Streaming Google Maps navigation to OLED display</string>
+
+    <string name="header_debug_console">Diagnostics &amp; Debug Console</string>
+    <string name="btn_rebind_listener">Rebind Listener</string>
+    <string name="btn_scan_tray">Scan Tray</string>
+    <string name="btn_clear_logs">Clear Logs</string>
+    <string name="btn_copy_logs">Copy Logs</string>
+    <string name="cb_log_all_notifs">Log All System Notifications</string>
 </resources>

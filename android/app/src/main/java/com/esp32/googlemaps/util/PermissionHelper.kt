@@ -28,6 +28,37 @@ object PermissionHelper {
         context.startActivity(intent)
     }
 
+    fun rebindNotificationListener(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                android.service.notification.NotificationListenerService.requestRebind(
+                    ComponentName(context, GoogleMapsNotificationListener::class.java)
+                )
+                DebugLogger.log("LISTENER", "Called requestRebind()", DebugLogger.Level.INFO)
+            } catch (e: Exception) {
+                DebugLogger.log("LISTENER", "requestRebind exception: ${e.message}", DebugLogger.Level.WARN)
+            }
+        }
+
+        try {
+            val cn = ComponentName(context, GoogleMapsNotificationListener::class.java)
+            val pm = context.packageManager
+            pm.setComponentEnabledSetting(
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            pm.setComponentEnabledSetting(
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            DebugLogger.log("LISTENER", "Component state toggled to kickstart binding", DebugLogger.Level.INFO)
+        } catch (e: Exception) {
+            DebugLogger.log("LISTENER", "Component toggle exception: ${e.message}", DebugLogger.Level.ERROR)
+        }
+    }
+
     fun hasBluetoothPermissions(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&

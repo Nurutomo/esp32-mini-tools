@@ -52,7 +52,7 @@
         <!-- Notification Listener Service for Google Maps -->
         <service
             android:name=".service.GoogleMapsNotificationListener"
-            android:exported="false"
+            android:exported="true"
             android:label="ESP32 Google Maps Listener"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>

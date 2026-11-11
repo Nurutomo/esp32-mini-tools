@@ -248,6 +248,11 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         )
 
         val jsonString = Json.encodeToString(message)
+        com.esp32.googlemaps.util.DebugLogger.log(
+            "DISPATCH",
+            "Streaming to ESP32: nav=${currentNavState.isNavigating} road='${currentNavState.nextRoad}' dist='${currentNavState.distanceToTurn}' speed=$currentGpsSpeed km/h",
+            com.esp32.googlemaps.util.DebugLogger.Level.BT
+        )
         bluetoothController.send(jsonString)
     }
 

@@ -2,6 +2,8 @@ package com.esp32.googlemaps
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -9,6 +11,7 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -20,6 +23,7 @@ import com.esp32.googlemaps.model.NavigationState
 import com.esp32.googlemaps.service.GoogleMapsNotificationListener
 import com.esp32.googlemaps.service.NavigationBroadcastService
 import com.esp32.googlemaps.util.BitmapHelper
+import com.esp32.googlemaps.util.DebugLogger
 import com.esp32.googlemaps.util.PermissionHelper
 import timber.log.Timber
 
@@ -65,6 +69,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val debugLogListener = object : DebugLogger.LogListener {
+        override fun onLogAdded(entry: DebugLogger.LogEntry) {
+            val currentText = binding.txtDebugLogs.text.toString()
+            val newText = if (currentText == "Waiting for events..." || currentText.startsWith("Logs cleared")) {
+                entry.toString()
+            } else {
+                "$currentText\n$entry"
+            }
+            binding.txtDebugLogs.text = newText
+            binding.scrollDebugLogs.post {
+                binding.scrollDebugLogs.fullScroll(View.FOCUS_DOWN)
+            }
+        }
+
+        override fun onLogsCleared() {
+            binding.txtDebugLogs.text = "Logs cleared. Waiting for events..."
+        }
+
+        override fun onStatusChanged() {
+            updateListenerStatusBadge()
+        }
+    }
+
     private val selectDeviceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -85,6 +112,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         if (Timber.treeCount == 0) {
             Timber.plant(Timber.DebugTree())
+            Timber.plant(DebugLogger.InAppTree())
         }
 
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -96,6 +124,15 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
         updateDeviceUi()
         updateConnectionStateUi(BluetoothController.ConnectionState.DISCONNECTED, selectedDeviceName)
+        updateListenerStatusBadge()
+        initDebugLogView()
+
+        DebugLogger.log("APP", "ESP32 Google Maps HUD launched", DebugLogger.Level.INFO)
+
+        // Attempt rebind if permission already granted
+        if (PermissionHelper.isNotificationServiceEnabled(this) && !GoogleMapsNotificationListener.isConnected()) {
+            PermissionHelper.rebindNotificationListener(this)
+        }
 
         // Start foreground service if not already active
         startNavigationService()
@@ -104,6 +141,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionBadges()
+        updateListenerStatusBadge()
+        DebugLogger.addListener(debugLogListener)
 
         val filter = IntentFilter().apply {
             addAction(GoogleMapsNotificationListener.ACTION_NAV_UPDATE)
@@ -115,7 +154,34 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        DebugLogger.removeListener(debugLogListener)
         LocalBroadcastManager.getInstance(this).unregisterReceiver(navReceiver)
+    }
+
+    private fun initDebugLogView() {
+        val existingLogs = DebugLogger.getLogs()
+        if (existingLogs.isNotEmpty()) {
+            binding.txtDebugLogs.text = existingLogs.joinToString("\n") { it.toString() }
+            binding.scrollDebugLogs.post {
+                binding.scrollDebugLogs.fullScroll(View.FOCUS_DOWN)
+            }
+        }
+    }
+
+    private fun updateListenerStatusBadge() {
+        val connected = GoogleMapsNotificationListener.isConnected()
+        val permGranted = PermissionHelper.isNotificationServiceEnabled(this)
+
+        if (connected) {
+            binding.badgeListenerStatus.text = "Listener: Connected"
+            binding.badgeListenerStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+        } else if (permGranted) {
+            binding.badgeListenerStatus.text = "Listener: Permitted (Tap Rebind)"
+            binding.badgeListenerStatus.setTextColor(ContextCompat.getColor(this, R.color.status_yellow))
+        } else {
+            binding.badgeListenerStatus.text = "Listener: Perm Missing"
+            binding.badgeListenerStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+        }
     }
 
     private fun setupListeners() {
@@ -143,6 +209,41 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnPermLocation.setOnClickListener {
             PermissionHelper.requestLocationPermissions(this)
+        }
+
+        // Debug Console Controls
+        binding.btnRebindListener.setOnClickListener {
+            PermissionHelper.rebindNotificationListener(this)
+            Toast.makeText(this, "Rebind requested & component toggled", Toast.LENGTH_SHORT).show()
+            updateListenerStatusBadge()
+        }
+
+        binding.btnScanTray.setOnClickListener {
+            GoogleMapsNotificationListener.scanActiveNotifications()
+            Toast.makeText(this, "Scanning active notification tray...", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.cbLogAllNotifs.setOnCheckedChangeListener { _, isChecked ->
+            DebugLogger.logAllNotifications = isChecked
+            val stateText = if (isChecked) "ENABLED" else "DISABLED"
+            DebugLogger.log("CONSOLE", "Log all notifications: $stateText", DebugLogger.Level.INFO)
+            Toast.makeText(this, "Log all notifications: $stateText", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnClearLogs.setOnClickListener {
+            DebugLogger.clear()
+        }
+
+        binding.btnCopyLogs.setOnClickListener {
+            val logs = DebugLogger.getAllFormattedLogs()
+            if (logs.isNotEmpty()) {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("ESP32_HUD_LOGS", logs)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this, "Copied ${logs.lines().size} lines to clipboard!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "No logs to copy", Toast.LENGTH_SHORT).show()
+            }
         }
 
         // Quick Test Buttons (Desk Simulation)

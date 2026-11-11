@@ -108,7 +108,9 @@ class BluetoothController(private val context: Context) {
         val useBle = forceBle || (deviceType == BluetoothDevice.DEVICE_TYPE_LE)
         isBleMode = useBle
 
-        Timber.d("Connecting to ${device.name} ($address) [BLE=$useBle, type=$deviceType]")
+        val connectMsg = "Connecting to ${device.name ?: "ESP32"} ($address) [mode=${if (useBle) "BLE" else "Classic BT"}]"
+        Timber.d(connectMsg)
+        com.esp32.googlemaps.util.DebugLogger.log("BT", connectMsg, com.esp32.googlemaps.util.DebugLogger.Level.BT)
 
         connectJob = scope.launch {
             if (useBle) {
@@ -130,10 +132,13 @@ class BluetoothController(private val context: Context) {
             classicInputStream = socket.inputStream
             state = ConnectionState.CONNECTED
             Timber.i("Connected to Classic BT: ${device.name}")
+            com.esp32.googlemaps.util.DebugLogger.log("BT", "Connected to Classic BT: ${device.name}", com.esp32.googlemaps.util.DebugLogger.Level.BT)
 
             startClassicReadLoop()
         } catch (e: Exception) {
-            Timber.w("Classic BT connect failed: ${e.message}. Attempting BLE fallback...")
+            val failMsg = "Classic BT connect failed: ${e.message}. Attempting BLE fallback..."
+            Timber.w(failMsg)
+            com.esp32.googlemaps.util.DebugLogger.log("BT", failMsg, com.esp32.googlemaps.util.DebugLogger.Level.WARN)
             // Fallback to BLE if classic fails (useful for dual-mode chips or C3/S3)
             connectBle(device)
         }
@@ -191,8 +196,10 @@ class BluetoothController(private val context: Context) {
                         bleRxChar = nusService.getCharacteristic(NUS_RX_CHAR_UUID)
                         state = ConnectionState.CONNECTED
                         Timber.i("NUS Service discovered, BLE connected!")
+                        com.esp32.googlemaps.util.DebugLogger.log("BT", "BLE connected! MTU=$negotiatedMtu", com.esp32.googlemaps.util.DebugLogger.Level.BT)
                     } else {
                         Timber.e("Nordic UART Service not found on device!")
+                        com.esp32.googlemaps.util.DebugLogger.log("BT", "Nordic UART Service not found on device!", com.esp32.googlemaps.util.DebugLogger.Level.ERROR)
                         disconnect()
                         CoroutineScope(Dispatchers.Main).launch {
                             listener?.onError("Nordic UART Service not found on ESP32 BLE")
@@ -228,12 +235,15 @@ class BluetoothController(private val context: Context) {
             try {
                 if (isBleMode && bleGatt != null && bleRxChar != null) {
                     sendBleChunks(data)
+                    com.esp32.googlemaps.util.DebugLogger.log("BT_TX", "Sent ${data.size} bytes (BLE chunks)", com.esp32.googlemaps.util.DebugLogger.Level.BT)
                 } else if (classicOutputStream != null) {
                     classicOutputStream?.write(data)
                     classicOutputStream?.flush()
+                    com.esp32.googlemaps.util.DebugLogger.log("BT_TX", "Sent ${data.size} bytes (Classic SPP)", com.esp32.googlemaps.util.DebugLogger.Level.BT)
                 }
             } catch (e: Exception) {
                 Timber.e("Failed to send data: ${e.message}")
+                com.esp32.googlemaps.util.DebugLogger.log("BT_ERR", "Send error: ${e.message}", com.esp32.googlemaps.util.DebugLogger.Level.ERROR)
                 disconnect()
             }
         }
