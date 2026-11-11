@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ESP32 Maps HUD</string>
+    <string name="title_select_device">Select ESP32 Device</string>
+    <string name="scan_devices">Scan Bluetooth Devices</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting...</string>
+
+    <string name="header_connection">Bluetooth Connection</string>
+    <string name="header_hud_preview">OLED 128x64 Live HUD Preview</string>
+    <string name="header_permissions">Required Permissions</string>
+    <string name="header_test_controls">Quick Test Controls</string>
+
+    <string name="perm_notification_listener">Notification Listener (Google Maps)</string>
+    <string name="perm_bluetooth">Bluetooth Access (Connect/Scan)</string>
+    <string name="perm_location">GPS Location (Speedometer)</string>
+    <string name="grant_permission">Grant</string>
+    <string name="permission_granted">Granted</string>
+
+    <string name="btn_test_left">Turn Left</string>
+    <string name="btn_test_right">Turn Right</string>
+    <string name="btn_test_straight">Straight</string>
+    <string name="btn_test_roundabout">Roundabout</string>
+    <string name="btn_clear_hud">Clear HUD</string>
+
+    <string name="service_foreground_title">ESP32 Maps HUD Active</string>
+    <string name="service_foreground_content">Streaming Google Maps navigation to OLED display</string>
+</resources>
