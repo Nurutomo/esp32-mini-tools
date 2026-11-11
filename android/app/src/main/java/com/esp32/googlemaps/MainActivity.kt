@@ -7,10 +7,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.esp32.googlemaps.bluetooth.BluetoothController
 import com.esp32.googlemaps.databinding.ActivityMainBinding
@@ -35,7 +37,12 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 GoogleMapsNotificationListener.ACTION_NAV_UPDATE -> {
-                    val state = intent.getParcelableExtra<NavigationState>(GoogleMapsNotificationListener.EXTRA_NAV_STATE)
+                    @Suppress("DEPRECATION")
+                    val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(GoogleMapsNotificationListener.EXTRA_NAV_STATE, NavigationState::class.java)
+                    } else {
+                        intent.getParcelableExtra(GoogleMapsNotificationListener.EXTRA_NAV_STATE)
+                    }
                     if (state != null) {
                         updateHudPreview(state)
                     }
@@ -297,22 +304,22 @@ class MainActivity : AppCompatActivity() {
         when (state) {
             BluetoothController.ConnectionState.CONNECTED -> {
                 binding.badgeStatus.text = getString(R.string.status_connected)
-                binding.badgeStatus.setTextColor(getColor(R.color.status_green))
+                binding.badgeStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
                 binding.btnConnect.text = getString(R.string.disconnect)
-                binding.btnConnect.backgroundTintList = getColorStateList(R.color.status_red)
+                binding.btnConnect.backgroundTintList = ContextCompat.getColorStateList(this, R.color.status_red)
                 binding.txtSelectedDevice.text = "Device: ${deviceName ?: selectedDeviceName ?: "ESP32-OLED"}"
             }
             BluetoothController.ConnectionState.CONNECTING -> {
                 binding.badgeStatus.text = getString(R.string.status_connecting)
-                binding.badgeStatus.setTextColor(getColor(R.color.status_yellow))
+                binding.badgeStatus.setTextColor(ContextCompat.getColor(this, R.color.status_yellow))
                 binding.btnConnect.text = "Connecting..."
-                binding.btnConnect.backgroundTintList = getColorStateList(R.color.primary)
+                binding.btnConnect.backgroundTintList = ContextCompat.getColorStateList(this, R.color.primary)
             }
             BluetoothController.ConnectionState.DISCONNECTED -> {
                 binding.badgeStatus.text = getString(R.string.status_disconnected)
-                binding.badgeStatus.setTextColor(getColor(R.color.status_red))
+                binding.badgeStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
                 binding.btnConnect.text = getString(R.string.connect)
-                binding.btnConnect.backgroundTintList = getColorStateList(R.color.primary)
+                binding.btnConnect.backgroundTintList = ContextCompat.getColorStateList(this, R.color.primary)
             }
         }
     }
@@ -336,33 +343,33 @@ class MainActivity : AppCompatActivity() {
         // 1. Notification Listener
         if (PermissionHelper.isNotificationServiceEnabled(this)) {
             binding.btnPermNotification.text = getString(R.string.permission_granted)
-            binding.btnPermNotification.setTextColor(getColor(R.color.status_green))
+            binding.btnPermNotification.setTextColor(ContextCompat.getColor(this, R.color.status_green))
             binding.btnPermNotification.isEnabled = false
         } else {
             binding.btnPermNotification.text = getString(R.string.grant_permission)
-            binding.btnPermNotification.setTextColor(getColor(R.color.primary))
+            binding.btnPermNotification.setTextColor(ContextCompat.getColor(this, R.color.primary))
             binding.btnPermNotification.isEnabled = true
         }
 
         // 2. Bluetooth
         if (PermissionHelper.hasBluetoothPermissions(this)) {
             binding.btnPermBluetooth.text = getString(R.string.permission_granted)
-            binding.btnPermBluetooth.setTextColor(getColor(R.color.status_green))
+            binding.btnPermBluetooth.setTextColor(ContextCompat.getColor(this, R.color.status_green))
             binding.btnPermBluetooth.isEnabled = false
         } else {
             binding.btnPermBluetooth.text = getString(R.string.grant_permission)
-            binding.btnPermBluetooth.setTextColor(getColor(R.color.primary))
+            binding.btnPermBluetooth.setTextColor(ContextCompat.getColor(this, R.color.primary))
             binding.btnPermBluetooth.isEnabled = true
         }
 
         // 3. Location
         if (PermissionHelper.hasLocationPermissions(this)) {
             binding.btnPermLocation.text = getString(R.string.permission_granted)
-            binding.btnPermLocation.setTextColor(getColor(R.color.status_green))
+            binding.btnPermLocation.setTextColor(ContextCompat.getColor(this, R.color.status_green))
             binding.btnPermLocation.isEnabled = false
         } else {
             binding.btnPermLocation.text = getString(R.string.grant_permission)
-            binding.btnPermLocation.setTextColor(getColor(R.color.primary))
+            binding.btnPermLocation.setTextColor(ContextCompat.getColor(this, R.color.primary))
             binding.btnPermLocation.isEnabled = true
         }
     }

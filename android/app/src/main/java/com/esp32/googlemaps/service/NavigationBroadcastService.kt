@@ -17,6 +17,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.esp32.googlemaps.MainActivity
 import com.esp32.googlemaps.R
@@ -101,7 +102,7 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 startPeriodicPing()
             }
             ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopLocationUpdates()
                 stopPeriodicPing()
                 bluetoothController.disconnect()

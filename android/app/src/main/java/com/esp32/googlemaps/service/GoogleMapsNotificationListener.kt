@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.text.Spanned
@@ -87,6 +88,10 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 }
             } catch (_: Exception) {}
         }
+        if (rawBitmap == null) {
+            @Suppress("DEPRECATION")
+            rawBitmap = notification.largeIcon
+        }
 
         // 2. Try extracting from standard notification extras
         if (extras != null) {
@@ -122,8 +127,18 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
 
         // 3. Fallback / deep search inside RemoteViews hierarchy for maximum fidelity
         try {
-            val remoteViews = Notification.Builder.recoverBuilder(this, notification).createBigContentView()
-                ?: Notification.Builder.recoverBuilder(this, notification).createContentView()
+            val remoteViews = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    Notification.Builder.recoverBuilder(this, notification).createBigContentView()
+                        ?: Notification.Builder.recoverBuilder(this, notification).createContentView()
+                } catch (_: Exception) {
+                    @Suppress("DEPRECATION")
+                    notification.bigContentView ?: notification.contentView
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                notification.bigContentView ?: notification.contentView
+            }
 
             if (remoteViews != null) {
                 val layoutInflater = appSourceContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater

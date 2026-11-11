@@ -1,4 +1,4 @@
-name: Build and Deploy Web Flasher
+name: Build and Deploy Web Flasher & Android App
 
 on:
   push:
@@ -18,30 +18,64 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Build ESP32 PlatformIO Firmwares
+      - name: Set up Python for PlatformIO
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
-      - name: Build firmware
+
+      - name: Build firmware for all targets
         run: >-
           pio run
           -e esp32-c3-supermini
           -e esp32-devkit
           -e esp32-devkit-classic-bt
           -e esp32-s3-devkit
-      - name: Prepare web flasher
+
+      # 2. Build Android Companion App (APK)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Build Android Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      # 3. Prepare Web Flasher, Manifests & APK for GitHub Pages
+      - name: Prepare web flasher and publish APK
         shell: bash
         env:
           BUILD_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           site_dir="dist"
-          mkdir -p "$site_dir/firmware"
+          mkdir -p "$site_dir/firmware" "$site_dir/apk"
           cp web/index.html "$site_dir/index.html"
           build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           printf '{"commit":"%s","builtAt":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" > "$site_dir/commit.json"
+
+          # Publish built APK to website
+          apk_src="android/app/build/outputs/apk/release/app-release.apk"
+          if [ -f "$apk_src" ]; then
+            cp "$apk_src" "$site_dir/apk/esp32-google-maps.apk"
+            echo "Successfully copied APK to $site_dir/apk/esp32-google-maps.apk"
+          else
+            echo "ERROR: APK not found at $apk_src" >&2
+            exit 1
+          fi
 
           write_manifest() {
             local env_name="$1" device_name="$2" chip_family="$3"
@@ -70,8 +104,19 @@ jobs:
           write_manifest esp32-devkit "Classic ESP32 OLED BLE (GPIO 21/22)" ESP32
           write_manifest esp32-devkit-classic-bt "Classic ESP32 OLED Bluetooth Classic (GPIO 21/22)" ESP32
           write_manifest esp32-s3-devkit "ESP32-S3 OLED BLE (GPIO 8/9)" ESP32-S3
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+
+      # 4. Upload APK as workflow artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-google-maps-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 

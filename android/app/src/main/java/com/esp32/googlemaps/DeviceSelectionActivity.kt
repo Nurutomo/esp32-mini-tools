@@ -16,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.esp32.googlemaps.databinding.ActivityDeviceSelectionBinding
@@ -155,7 +156,7 @@ class DeviceSelectionActivity : AppCompatActivity() {
             holder.nameView.text = item.name
             holder.addressView.text = item.address
             holder.badgeView.text = if (item.isBle) "BLE" else "Classic BT"
-            holder.badgeView.setTextColor(if (item.isBle) getColor(R.color.primary) else getColor(R.color.status_yellow))
+            holder.badgeView.setTextColor(if (item.isBle) ContextCompat.getColor(this@DeviceSelectionActivity, R.color.primary) else ContextCompat.getColor(this@DeviceSelectionActivity, R.color.status_yellow))
 
             holder.view.setOnClickListener {
                 onSelect(item)
