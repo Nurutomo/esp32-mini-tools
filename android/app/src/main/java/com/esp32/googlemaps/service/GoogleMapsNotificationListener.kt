@@ -58,6 +58,12 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
 
         fun isNavigationNotification(sbn: StatusBarNotification): Boolean {
             val pkg = sbn.packageName.lowercase(Locale.ROOT)
+
+            // Critical: NEVER intercept our own companion app's notifications (prevents infinite feedback loop)
+            if (pkg.startsWith("com.esp32.") || pkg == "com.esp32.googlemaps") {
+                return false
+            }
+
             if (pkg.contains("com.google.android.apps.maps") ||
                 pkg == GMAPS_LITE_PACKAGE ||
                 pkg == GMAPS_GO_PACKAGE ||

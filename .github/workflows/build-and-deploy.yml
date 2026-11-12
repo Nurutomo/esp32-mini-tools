@@ -16,11 +16,19 @@ concurrency:
 
 jobs:
   # =========================================================================
-  # 1. Build ESP32 Firmwares (Runs in Parallel, Caches & Skips if Unchanged)
+  # 1. Build ESP32 Firmwares (Parallel Matrix Strategy, Caching & Skipping)
   # =========================================================================
   build-firmware:
-    name: Build ESP32 Firmware
+    name: Build ESP32 Firmware (${{ matrix.board }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - esp32-c3-supermini
+          - esp32-devkit
+          - esp32-devkit-classic-bt
+          - esp32-s3-devkit
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,24 +39,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            .pio/build
+            .pio/build/${{ matrix.board }}
             ~/.platformio
-          key: pio-firmware-${{ runner.os }}-${{ hashFiles('platformio.ini', 'src/**', 'include/**', 'lib/**') }}
+          key: pio-firmware-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('platformio.ini', 'src/**', 'include/**', 'lib/**') }}
           restore-keys: |
-            pio-firmware-${{ runner.os }}-
+            pio-firmware-${{ runner.os }}-${{ matrix.board }}-
 
       - name: Check cached firmware binaries
         id: check-firmware
         shell: bash
         run: |
-          if [ -f .pio/build/esp32-c3-supermini/firmware.bin ] && \
-             [ -f .pio/build/esp32-devkit/firmware.bin ] && \
-             [ -f .pio/build/esp32-devkit-classic-bt/firmware.bin ] && \
-             [ -f .pio/build/esp32-s3-devkit/firmware.bin ]; then
-            echo "All 4 ESP32 target binaries found in cache. Skipping compilation!"
+          if [ -f .pio/build/${{ matrix.board }}/firmware.bin ] && \
+             [ -f .pio/build/${{ matrix.board }}/bootloader.bin ] && \
+             [ -f .pio/build/${{ matrix.board }}/partitions.bin ]; then
+            echo "All binaries for ${{ matrix.board }} found in cache. Skipping compilation!"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Firmware binaries missing or source modified. Running full build."
+            echo "Binaries missing or source modified for ${{ matrix.board }}. Running full build."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -62,31 +69,23 @@ jobs:
         if: steps.check-firmware.outputs.skip != 'true'
         run: python -m pip install --upgrade platformio
 
-      - name: Build firmware for all targets
+      - name: Build firmware for target
         if: steps.check-firmware.outputs.skip != 'true'
-        run: >-
-          pio run -j 4
-          -e esp32-c3-supermini
-          -e esp32-devkit
-          -e esp32-devkit-classic-bt
-          -e esp32-s3-devkit
+        run: pio run -e ${{ matrix.board }}
 
       - name: Prepare firmware artifacts
         shell: bash
         run: |
-          mkdir -p dist-firmware
-          for env in esp32-c3-supermini esp32-devkit esp32-devkit-classic-bt esp32-s3-devkit; do
-            mkdir -p "dist-firmware/$env"
-            cp ".pio/build/$env/bootloader.bin" "dist-firmware/$env/"
-            cp ".pio/build/$env/partitions.bin" "dist-firmware/$env/"
-            cp ".pio/build/$env/firmware.bin" "dist-firmware/$env/"
-          done
+          mkdir -p "dist-firmware/${{ matrix.board }}"
+          cp ".pio/build/${{ matrix.board }}/bootloader.bin" "dist-firmware/${{ matrix.board }}/"
+          cp ".pio/build/${{ matrix.board }}/partitions.bin" "dist-firmware/${{ matrix.board }}/"
+          cp ".pio/build/${{ matrix.board }}/firmware.bin" "dist-firmware/${{ matrix.board }}/"
 
-      - name: Upload firmware binaries artifact
+      - name: Upload firmware binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-firmware
-          path: dist-firmware
+          name: esp32-firmware-${{ matrix.board }}
+          path: dist-firmware/${{ matrix.board }}
           retention-days: 7
 
   # =========================================================================
@@ -163,11 +162,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download firmware artifact
+      - name: Download firmware - esp32-c3-supermini
         uses: actions/download-artifact@v4
         with:
-          name: esp32-firmware
-          path: downloaded-firmware
+          name: esp32-firmware-esp32-c3-supermini
+          path: downloaded-firmware/esp32-c3-supermini
+
+      - name: Download firmware - esp32-devkit
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware-esp32-devkit
+          path: downloaded-firmware/esp32-devkit
+
+      - name: Download firmware - esp32-devkit-classic-bt
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware-esp32-devkit-classic-bt
+          path: downloaded-firmware/esp32-devkit-classic-bt
+
+      - name: Download firmware - esp32-s3-devkit
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware-esp32-s3-devkit
+          path: downloaded-firmware/esp32-s3-devkit
 
       - name: Download APK artifact
         uses: actions/download-artifact@v4

@@ -1,6 +1,8 @@
 package com.esp32.googlemaps
 
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -22,6 +24,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.esp32.googlemaps.bluetooth.BluetoothController
@@ -32,6 +35,9 @@ import com.esp32.googlemaps.service.NavigationBroadcastService
 import com.esp32.googlemaps.util.BitmapHelper
 import com.esp32.googlemaps.util.DebugLogger
 import com.esp32.googlemaps.util.PermissionHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
 
@@ -78,26 +84,54 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val debugLogListener = object : DebugLogger.LogListener {
-        override fun onLogAdded(entry: DebugLogger.LogEntry) {
-            val currentText = binding.txtDebugLogs.text.toString()
-            val newText = if (currentText == "Waiting for events..." || currentText.startsWith("Logs cleared")) {
-                entry.toString()
-            } else {
-                "$currentText\n$entry"
-            }
-            binding.txtDebugLogs.text = newText
+        private val pendingLogs = mutableListOf<DebugLogger.LogEntry>()
+        private var isFlushScheduled = false
 
-            // Fix page autoscroll: Scroll directly inside child view WITHOUT requesting focus!
-            // When fullScroll(FOCUS_DOWN) was used, focus change triggered parent ScrollView to jump to bottom.
-            if (binding.cbAutoScrollLogs.isChecked) {
-                binding.scrollDebugLogs.post {
-                    val bottom = binding.txtDebugLogs.bottom
-                    binding.scrollDebugLogs.scrollTo(0, bottom)
-                }
+        override fun onLogAdded(entry: DebugLogger.LogEntry) {
+            synchronized(pendingLogs) {
+                pendingLogs.add(entry)
+            }
+            if (!isFlushScheduled) {
+                isFlushScheduled = true
+                binding.txtDebugLogs.postDelayed({
+                    val entriesToFlush = synchronized(pendingLogs) {
+                        val list = ArrayList(pendingLogs)
+                        pendingLogs.clear()
+                        isFlushScheduled = false
+                        list
+                    }
+                    if (entriesToFlush.isEmpty()) return@postDelayed
+
+                    val currentText = binding.txtDebugLogs.text
+                    if (currentText.isEmpty() || currentText == "Waiting for events..." || currentText.startsWith("Logs cleared")) {
+                        binding.txtDebugLogs.text = entriesToFlush.joinToString("\n") { it.toString() }
+                    } else {
+                        val sb = StringBuilder()
+                        for (e in entriesToFlush) {
+                            sb.append("\n").append(e.toString())
+                        }
+                        binding.txtDebugLogs.append(sb.toString())
+
+                        // Prune excess lines to prevent memory explosion & layout rendering lag (keep max ~15000 chars)
+                        if (binding.txtDebugLogs.length() > 15000) {
+                            val trimmed = binding.txtDebugLogs.text.takeLast(10000).substringAfter("\n")
+                            binding.txtDebugLogs.text = trimmed
+                        }
+                    }
+
+                    if (binding.cbAutoScrollLogs.isChecked) {
+                        binding.scrollDebugLogs.post {
+                            binding.scrollDebugLogs.scrollTo(0, binding.txtDebugLogs.bottom)
+                        }
+                    }
+                }, 100)
             }
         }
 
         override fun onLogsCleared() {
+            synchronized(pendingLogs) {
+                pendingLogs.clear()
+            }
             binding.txtDebugLogs.text = "Logs cleared. Waiting for events..."
         }
 
@@ -119,6 +153,28 @@ class MainActivity : AppCompatActivity() {
 
             // Trigger connect automatically
             connectToSelectedDevice()
+        }
+    }
+
+    private val enableBluetoothForConnectLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(this, "Bluetooth turned on. Connecting...", Toast.LENGTH_SHORT).show()
+            connectToSelectedDevice()
+        } else {
+            Toast.makeText(this, "Bluetooth is required to connect to ESP32", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val enableBluetoothForScanLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val intent = Intent(this, DeviceSelectionActivity::class.java)
+            selectDeviceLauncher.launch(intent)
+        } else {
+            Toast.makeText(this, "Bluetooth is required to scan for ESP32", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -169,8 +225,12 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Rebind requested from CLI", Toast.LENGTH_SHORT).show()
             }
             "scan" -> {
-                GoogleMapsNotificationListener.scanActiveNotifications()
-                Toast.makeText(this, "Scan tray requested from CLI", Toast.LENGTH_SHORT).show()
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        GoogleMapsNotificationListener.scanActiveNotifications()
+                    }
+                    Toast.makeText(this@MainActivity, "Scan tray requested from CLI", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -233,8 +293,14 @@ class MainActivity : AppCompatActivity() {
 
         // Pick Device button
         binding.btnSelectDevice.setOnClickListener {
-            val intent = Intent(this, DeviceSelectionActivity::class.java)
-            selectDeviceLauncher.launch(intent)
+            val bm = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val adapter = bm?.adapter
+            if (adapter != null && !adapter.isEnabled) {
+                enableBluetoothForScanLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } else {
+                val intent = Intent(this, DeviceSelectionActivity::class.java)
+                selectDeviceLauncher.launch(intent)
+            }
         }
 
         // Permission buttons
@@ -256,12 +322,27 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnScanTray.setOnClickListener {
-            GoogleMapsNotificationListener.scanActiveNotifications()
-            Toast.makeText(this, "Scanning active notification tray...", Toast.LENGTH_SHORT).show()
+            binding.btnScanTray.isEnabled = false
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    GoogleMapsNotificationListener.scanActiveNotifications()
+                }
+                binding.btnScanTray.isEnabled = true
+                Toast.makeText(this@MainActivity, "Scanned active notification tray", Toast.LENGTH_SHORT).show()
+            }
         }
 
         binding.btnDumpJson.setOnClickListener {
-            dumpNotificationsAndShowDialog()
+            binding.btnDumpJson.isEnabled = false
+            binding.btnDumpJson.text = "Dumping..."
+            lifecycleScope.launch {
+                val json = withContext(Dispatchers.IO) {
+                    GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+                }
+                binding.btnDumpJson.isEnabled = true
+                binding.btnDumpJson.text = getString(R.string.btn_dump_json)
+                showDumpJsonDialog(json)
+            }
         }
 
         // Prevent outer ScrollView from intercepting touches when scrolling the log viewer
@@ -396,7 +477,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dumpNotificationsAndShowDialog() {
-        val json = GoogleMapsNotificationListener.dumpActiveNotificationsJson(this)
+        lifecycleScope.launch {
+            val json = withContext(Dispatchers.IO) {
+                GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+            }
+            showDumpJsonDialog(json)
+        }
+    }
+
+    private fun showDumpJsonDialog(json: String) {
 
         // 1. Copy to clipboard immediately
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -489,12 +578,25 @@ class MainActivity : AppCompatActivity() {
         val address = selectedDeviceAddress
         if (address.isNullOrEmpty()) {
             Toast.makeText(this, "Please select an ESP32 device first", Toast.LENGTH_SHORT).show()
-            selectDeviceLauncher.launch(Intent(this, DeviceSelectionActivity::class.java))
+            val bm = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val adapter = bm?.adapter
+            if (adapter != null && !adapter.isEnabled) {
+                enableBluetoothForScanLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } else {
+                selectDeviceLauncher.launch(Intent(this, DeviceSelectionActivity::class.java))
+            }
             return
         }
 
         if (!PermissionHelper.hasBluetoothPermissions(this)) {
             PermissionHelper.requestBluetoothPermissions(this)
+            return
+        }
+
+        val bm = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = bm?.adapter
+        if (adapter != null && !adapter.isEnabled) {
+            enableBluetoothForConnectLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             return
         }
 

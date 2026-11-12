@@ -17,6 +17,9 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.esp32.googlemaps.databinding.ActivityDeviceSelectionBinding
@@ -35,6 +38,17 @@ class DeviceSelectionActivity : AppCompatActivity() {
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         val bm = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         bm?.adapter
+    }
+
+    private val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(this, "Bluetooth enabled, scanning for devices...", Toast.LENGTH_SHORT).show()
+            startScan()
+        } else {
+            Toast.makeText(this, "Bluetooth must be turned on to discover devices", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,18 +90,31 @@ class DeviceSelectionActivity : AppCompatActivity() {
             return
         }
 
+        val adapter = bluetoothAdapter
+        if (adapter == null) {
+            Toast.makeText(this, "Bluetooth is not supported on this device", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Turn on Bluetooth first if disabled
+        if (!adapter.isEnabled) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBluetoothLauncher.launch(enableBtIntent)
+            return
+        }
+
         deviceList.clear()
 
         // 1. Load paired bonded devices (Classic BT & bonded BLE)
-        bluetoothAdapter?.bondedDevices?.forEach { device ->
+        adapter.bondedDevices?.forEach { device ->
             val name = device.name ?: "Unknown"
             val isBle = (device.type == BluetoothDevice.DEVICE_TYPE_LE)
             addDeviceIfNew(BluetoothDeviceInfo(name, device.address, isBle, true))
         }
-        adapter.notifyDataSetChanged()
+        this.adapter.notifyDataSetChanged()
 
         // 2. Scan for BLE devices
-        val scanner = bluetoothAdapter?.bluetoothLeScanner
+        val scanner = adapter.bluetoothLeScanner
         if (scanner != null && !isScanning) {
             isScanning = true
             binding.progressBarScanning.visibility = View.VISIBLE
@@ -96,6 +123,19 @@ class DeviceSelectionActivity : AppCompatActivity() {
             handler.postDelayed({
                 stopScan()
             }, 8000)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (PermissionHelper.hasBluetoothPermissions(this)) {
+            startScan()
+        } else {
+            Toast.makeText(this, "Bluetooth permissions required to discover devices", Toast.LENGTH_SHORT).show()
         }
     }
 
