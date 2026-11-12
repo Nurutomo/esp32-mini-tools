@@ -11,15 +11,13 @@ uint8_t gPin = 10;
 
 void begin(uint8_t pinNumber) {
   gPin = pinNumber;
-  pinMode(gPin, OUTPUT);
-  digitalWrite(gPin, LOW);
+  pinMode(gPin, INPUT);
 }
 
 void setPin(uint8_t pinNumber) {
   stop();
   gPin = pinNumber;
-  pinMode(gPin, OUTPUT);
-  digitalWrite(gPin, LOW);
+  pinMode(gPin, INPUT);
 }
 
 void beep(uint16_t frequencyHz, uint16_t durationMs) {
@@ -32,7 +30,7 @@ void beep(uint16_t frequencyHz, uint16_t durationMs) {
 
 void stop() {
   noTone(gPin);
-  digitalWrite(gPin, LOW);
+  pinMode(gPin, INPUT);
 }
 
 uint8_t pin() {
