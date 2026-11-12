@@ -41,7 +41,10 @@ data class Esp32Message(
     val speed: Int? = null,
 
     @SerialName("preferences")
-    val preferences: DevicePreferences? = null
+    val preferences: DevicePreferences? = null,
+
+    @SerialName("ts")
+    val epochSeconds: Long? = null
 )
 
 @Serializable

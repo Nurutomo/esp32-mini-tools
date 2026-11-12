@@ -233,6 +233,19 @@ void renderNavHud(const NavigationData& nav) {
     gDisplay.print(nav.distance);
   }
 
+  // Clock and date below the distance label: "DD/MM HH:MM" at text size 1.
+  // Shown as soon as the phone sends the first time sync; kept up by millis() drift tracking.
+  gDisplay.setTextSize(1);
+  if (isClockSynced()) {
+    char timeStr[6], dateStr[6];
+    getClockTimeStr(timeStr, sizeof(timeStr));
+    getClockDateStr(dateStr, sizeof(dateStr));
+    char clockLine[12];
+    snprintf(clockLine, sizeof(clockLine), "%s %s", dateStr, timeStr);
+    gDisplay.setCursor(kTextX, 23);
+    gDisplay.print(clockLine);
+  }
+
   // Speed badge is right aligned and gets reserved space so it cannot overlap distance.
   gDisplay.setTextSize(1);
   if (nav.speed >= 0) {
@@ -278,10 +291,10 @@ void renderNavHud(const NavigationData& nav) {
     pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, "%s", nav.ete);
   }
   if (nav.totalDistance[0] != '\0' && pos < sizeof(tripLine) - 1) {
-    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? " - %s" : "%s", nav.totalDistance);
+    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? "-%s" : "%s", nav.totalDistance);
   }
   if (nav.eta[0] != '\0' && pos < sizeof(tripLine) - 1) {
-    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? " - %s" : "%s", nav.eta);
+    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? "-%s" : "%s", nav.eta);
   }
 
   if (tripLine[0] != '\0') {

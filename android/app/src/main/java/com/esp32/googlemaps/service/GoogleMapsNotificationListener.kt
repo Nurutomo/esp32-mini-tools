@@ -421,8 +421,8 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             val (iconBase64, monoBmp) = BitmapHelper.bitmapToBase64(selectedBitmap ?: finalBitmap)
 
             return NavigationState(
-                nextRoad = nextRoad.replace(Regex("\\p{Z}+"), ""),
-                nextRoadSub = nextRoadSub.replace(Regex("\\p{Z}+"), ""),
+                nextRoad = nextRoad.replace(Regex("\\p{Z}+"), " ").trim(),
+                nextRoadSub = nextRoadSub.replace(Regex("\\p{Z}+"), " ").trim(),
                 distanceToTurn = distance.replace(Regex("\\p{Z}+"), "").trim(),
                 eta = eta,
                 ete = ete,

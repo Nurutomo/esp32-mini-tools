@@ -5,7 +5,43 @@
 
 namespace {
 NavigationData gNavData;
+
+// Clock state: epoch seconds from phone + millis() snapshot at sync time.
+// The ESP keeps its own time by adding elapsed millis since last sync.
+uint64_t gClockEpochSec = 0;   // Unix timestamp at last sync (seconds)
+uint32_t gClockSyncMs   = 0;   // millis() value when that sync arrived
+bool     gClockSynced   = false;
+
+// Return current Unix epoch seconds (best-effort, drifts without periodic resync).
+uint64_t currentEpochSec() {
+  if (!gClockSynced) return 0;
+  const uint32_t nowMs = millis();
+  const uint32_t elapsedMs = nowMs - gClockSyncMs;  // wraps after ~49 days, acceptable
+  return gClockEpochSec + (elapsedMs / 1000UL);
 }
+
+// Convert epoch seconds to broken-down time components (UTC only; no DST/timezone).
+// For display the phone already sends wall-clock epoch, so the user sees local time.
+struct ClockFields { uint8_t h, m, d, mo; };
+ClockFields epochToFields(uint64_t epoch) {
+  // Days since Unix epoch
+  uint32_t days = static_cast<uint32_t>(epoch / 86400UL);
+  uint32_t rem  = static_cast<uint32_t>(epoch % 86400UL);
+  uint8_t h = rem / 3600;
+  uint8_t m = (rem % 3600) / 60;
+
+  // Gregorian calendar calculation
+  uint32_t z = days + 719468;
+  uint32_t era = z / 146097;
+  uint32_t doe = z - era * 146097;
+  uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  uint32_t mp  = (5 * doy + 2) / 153;
+  uint8_t  d   = static_cast<uint8_t>(doy - (153 * mp + 2) / 5 + 1);
+  uint8_t  mo  = static_cast<uint8_t>(mp < 10 ? mp + 3 : mp - 9);
+  return {h, m, d, mo};
+}
+} // namespace
 
 NavigationData& getNavigationData() {
   return gNavData;
@@ -90,6 +126,17 @@ bool processNavigationJson(const char* payload, size_t len) {
     recognized = true;
   }
 
+  // 4. Phone clock sync — Unix epoch seconds (local time from phone)
+  if (doc["ts"].is<uint64_t>() || doc["ts"].is<long>()) {
+    const uint64_t ts = doc["ts"].as<uint64_t>();
+    if (ts > 1000000000ULL) {  // sanity: must be after year 2001
+      gClockEpochSec = ts;
+      gClockSyncMs   = millis();
+      gClockSynced   = true;
+      recognized = true;
+    }
+  }
+
   return recognized;
 }
 
@@ -109,4 +156,28 @@ void resetNavigation() {
   gNavData.speed = -1;
   gNavData.hasIcon = false;
   memset(gNavData.iconBitmap, 0, sizeof(gNavData.iconBitmap));
+}
+
+bool isClockSynced() {
+  return gClockSynced;
+}
+
+void getClockTimeStr(char* buf, size_t bufLen) {
+  if (!gClockSynced) {
+    strncpy(buf, "--:--", bufLen);
+    buf[bufLen - 1] = '\0';
+    return;
+  }
+  const ClockFields f = epochToFields(currentEpochSec());
+  snprintf(buf, bufLen, "%02u:%02u", f.h, f.m);
+}
+
+void getClockDateStr(char* buf, size_t bufLen) {
+  if (!gClockSynced) {
+    strncpy(buf, "--/--", bufLen);
+    buf[bufLen - 1] = '\0';
+    return;
+  }
+  const ClockFields f = epochToFields(currentEpochSec());
+  snprintf(buf, bufLen, "%02u/%02u", f.d, f.mo);
 }

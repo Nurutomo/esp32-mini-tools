@@ -39,3 +39,12 @@ bool isNavigationActive(uint32_t timeoutMs = kNavTimeoutDefaultMs);
 
 // Clear navigation state
 void resetNavigation();
+
+// Clock synced from phone. Returns true if a time sync has been received.
+bool isClockSynced();
+
+// Fill buf with current time "HH:MM" (up to bufLen bytes, NUL-terminated).
+void getClockTimeStr(char* buf, size_t bufLen);
+
+// Fill buf with current date "DD/MM" (up to bufLen bytes, NUL-terminated).
+void getClockDateStr(char* buf, size_t bufLen);

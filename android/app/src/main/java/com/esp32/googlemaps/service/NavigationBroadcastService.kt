@@ -238,14 +238,16 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
             Timber.w("Cannot send selected icon: Bluetooth is disconnected")
             return
         }
-        currentNavState = NavigationState(
-            nextRoad = iconLabel,
-            iconBase64 = iconBase64,
+        val message = Esp32Message(
+            navigation = NavigationPayload(
+                nextRoad = iconLabel,
+                iconBase64 = iconBase64
+            ),
             speed = currentGpsSpeed,
-            isNavigating = true,
-            lastUpdatedMs = System.currentTimeMillis()
+            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
+            epochSeconds = System.currentTimeMillis() / 1000L
         )
-        sendJsonPayload()
+        bluetoothController.send(Json.encodeToString(message))
     }
 
     fun handleNavigationUpdate(state: NavigationState) {
@@ -282,7 +284,8 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         val message = Esp32Message(
             navigation = navPayload,
             speed = currentGpsSpeed,
-            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60)
+            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
+            epochSeconds = System.currentTimeMillis() / 1000L
         )
 
         val jsonString = Json.encodeToString(message)

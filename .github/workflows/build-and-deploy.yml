@@ -239,7 +239,7 @@ jobs:
           # 1. Copy web flasher UI
           cp web/index.html "$site_dir/index.html"
           build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          app_version=$(grep -o 'versionName "[^"]*"' android/app/build.gradle | cut -d'"' -f2)
+          app_version=$(tr -d '[:space:]' < VERSION)
           printf '{"commit":"%s","builtAt":"%s","appVersion":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" "$app_version" > "$site_dir/commit.json"
 
           # 2. Copy Android APK (both versioned filename and generic fallback)
