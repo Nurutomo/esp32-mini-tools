@@ -200,6 +200,7 @@ void loop() {
   // Process incoming Bluetooth data and serial configuration commands.
   updateBluetooth();
   pollSerialCommands();
+  ui::buzzer::update(now);
 
   // The analog-input task samples independently; decode the resistor ladder for UI input.
   const uint16_t analogValue = gAnalogInputValue;
