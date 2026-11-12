@@ -197,7 +197,14 @@ class MainActivity : AppCompatActivity() {
         updateListenerStatusBadge()
         initDebugLogView()
 
-        DebugLogger.log("APP", "ESP32 Google Maps HUD launched", DebugLogger.Level.INFO)
+        val appVersionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.4"
+        } catch (_: Exception) {
+            "1.0.4"
+        }
+        binding.badgeAppVersion.text = "v$appVersionName"
+
+        DebugLogger.log("APP", "ESP32 Google Maps HUD v$appVersionName launched", DebugLogger.Level.INFO)
 
         // Attempt rebind if permission already granted
         if (PermissionHelper.isNotificationServiceEnabled(this) && !GoogleMapsNotificationListener.isConnected()) {

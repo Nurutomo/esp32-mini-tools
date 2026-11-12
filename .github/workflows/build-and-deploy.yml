@@ -33,26 +33,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Cache PlatformIO build artifacts & toolchains based on firmware sources
-      - name: Cache PlatformIO builds & toolchains
-        id: pio-cache
+      # Cache PlatformIO toolchains and core (speeds up install)
+      - name: Cache PlatformIO Core & Toolchains
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-core-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-core-${{ runner.os }}-
+
+      # Cache compiled firmware binaries with EXACT source hash (NO restore-keys to avoid stale binaries!)
+      - name: Cache Compiled Firmware Binaries
+        id: cache-firmware
         uses: actions/cache@v4
         with:
           path: |
-            .pio/build/${{ matrix.board }}
-            ~/.platformio
-          key: pio-firmware-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('platformio.ini', 'src/**', 'include/**', 'lib/**') }}
-          restore-keys: |
-            pio-firmware-${{ runner.os }}-${{ matrix.board }}-
+            .pio/build/${{ matrix.board }}/bootloader.bin
+            .pio/build/${{ matrix.board }}/partitions.bin
+            .pio/build/${{ matrix.board }}/firmware.bin
+          key: pio-bins-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('platformio.ini', 'src/**', 'include/**', 'lib/**') }}
 
       - name: Check cached firmware binaries
         id: check-firmware
         shell: bash
         run: |
-          if [ -f .pio/build/${{ matrix.board }}/firmware.bin ] && \
-             [ -f .pio/build/${{ matrix.board }}/bootloader.bin ] && \
-             [ -f .pio/build/${{ matrix.board }}/partitions.bin ]; then
-            echo "All binaries for ${{ matrix.board }} found in cache. Skipping compilation!"
+          if [ "${{ steps.cache-firmware.outputs.cache-hit }}" == "true" ] && \
+             [ -f .pio/build/${{ matrix.board }}/firmware.bin ]; then
+            echo "Exact cache hit for ${{ matrix.board }}. Skipping compilation!"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "Binaries missing or source modified for ${{ matrix.board }}. Running full build."
@@ -98,28 +105,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Cache Release APK and Gradle dependencies based on android/ sources
-      - name: Cache Android Release APK & Gradle
-        id: android-cache
+      # Cache Release APK with EXACT source hash (NO restore-keys to avoid stale APKs!)
+      - name: Cache Android Release APK
+        id: cache-apk
         uses: actions/cache@v4
         with:
-          path: |
-            android/app/build/outputs/apk/release/app-release.apk
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: android-apk-${{ runner.os }}-${{ hashFiles('android/**') }}
-          restore-keys: |
-            android-apk-${{ runner.os }}-
+          path: android/app/build/outputs/apk/release/app-release.apk
+          key: android-release-apk-${{ runner.os }}-${{ hashFiles('android/**') }}
 
       - name: Check cached APK
         id: check-apk
         shell: bash
         run: |
-          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
-            echo "Release APK found in cache. Skipping Gradle build!"
+          if [ "${{ steps.cache-apk.outputs.cache-hit }}" == "true" ] && \
+             [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            echo "Exact cache hit for Android sources. Skipping Gradle build!"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Release APK missing or Android source modified. Building APK."
+            echo "Cache miss or Android source modified. Building fresh Release APK."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
