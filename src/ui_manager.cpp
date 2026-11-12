@@ -44,6 +44,7 @@ void back() {
     return;
   }
   switch (gState.screen) {
+    case Screen::Navigation:
     case Screen::ButtonMonitor:
     case Screen::About:
     case Screen::BluetoothInfo:
