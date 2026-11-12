@@ -114,7 +114,7 @@ class MainActivity : AppCompatActivity() {
 
                         // Prune excess lines to prevent memory explosion & layout rendering lag (keep max ~15000 chars)
                         if (binding.txtDebugLogs.length() > 15000) {
-                            val trimmed = binding.txtDebugLogs.text.takeLast(10000).substringAfter("\n")
+                            val trimmed = binding.txtDebugLogs.text.toString().takeLast(10000).substringAfter("\n")
                             binding.txtDebugLogs.text = trimmed
                         }
                     }
