@@ -102,7 +102,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
         )
 
         val DURATION_REGEX = Regex(
-            """\b(\d+\s*(?:min|mins|mnt|menit|hr|hrs|jam|h|m))\b""",
+            """\b(\d+\s*(?:hr|hrs|jam|h)(?:\s*\d+(?:\s*(?:min|mins|mnt|menit|m))?)?|\d+\s*(?:min|mins|mnt|menit|m))\b""",
             RegexOption.IGNORE_CASE
         )
 
@@ -110,6 +110,46 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             """\b(\d+([.,]\d+)?\s*(?:km|mi|miles?))\b""",
             RegexOption.IGNORE_CASE
         )
+
+        private val TOWARD_PREFIX_REGEX = Regex(
+            """^(?:toward|towards|ke arah|menuju|vers|en direction de|richtung|in richtung|hacia|verso)\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val MANEUVER_SPLIT_REGEX = Regex(
+            """^(turn left|turn right|slight left|slight right|sharp left|sharp right|keep left|keep right|make a u-turn|u-turn|take exit \S+|belok kiri|belok kanan|putar balik)\s+(?:on|onto|to|toward|towards|ke|ke arah|di)\s+(.+)$""",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val ACTION_BUTTON_REGEX = Regex(
+            """^(?:exit navigation|exit|keluar navigasi|keluar|keluar dari navigasi|resume|lanjutkan|re-center|recenter|pusatkan kembali|mute|unmute|senyapkan|batal senyap|suara|stop|berhenti|share trip|bagikan perjalanan|feedback|masukan|overview|tinjauan|leave|quitter|reprendre|recentrer)$""",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val COORDINATE_REGEX = Regex(
+            """\b\d{1,2}°\d{1,2}'[\d.]+"?[NSEW]\b""",
+            RegexOption.IGNORE_CASE
+        )
+
+        fun isSummaryLine(trimmed: String): Boolean {
+            if (trimmed.isEmpty()) return false
+            val hasBullet = trimmed.contains("·") || trimmed.contains("•") || trimmed.contains("|")
+            val hasDuration = DURATION_REGEX.containsMatchIn(trimmed)
+            val hasClockTime = CLOCK_TIME_REGEX.containsMatchIn(trimmed)
+            val hasTotalDist = TOTAL_DIST_REGEX.containsMatchIn(trimmed)
+            val hasEtaWord = trimmed.contains(Regex("""(?i)\b(eta|tiba|arrival|ankunft|llegada)\b"""))
+
+            if (hasBullet && (hasDuration || hasClockTime || hasTotalDist || hasEtaWord)) {
+                return true
+            }
+            if (hasDuration && (hasTotalDist || hasClockTime || hasEtaWord)) {
+                return true
+            }
+            if ((hasClockTime || hasDuration || hasTotalDist) && hasEtaWord) {
+                return true
+            }
+            return false
+        }
 
         fun tryParseNotification(sbn: StatusBarNotification, context: Context): NavigationState? {
             val listener = activeInstance
@@ -187,14 +227,77 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             var ete = ""
             var totalDist = ""
 
-            val remainingTexts = mutableListOf<String>()
-
-            // 1. Scan for distance in candidate texts
+            // 1. Identify trip summary lines and extract ETA, ETE, and Total Distance
+            val nonSummaryTexts = mutableListOf<String>()
             for (text in candidateTexts) {
+                val trimmed = text.trim()
+                if (trimmed.isEmpty()) continue
+
+                // Ignore action buttons (e.g. "Exit navigation", "Resume")
+                if (ACTION_BUTTON_REGEX.matches(trimmed)) continue
+
+                // Check if coordinate string (e.g. "7°33'54.8\"S 112°32'10.4\"E - 17:32 ETA")
+                if (COORDINATE_REGEX.containsMatchIn(trimmed) || (trimmed.contains("°") && trimmed.contains("'"))) {
+                    if (eta.isEmpty()) {
+                        val timeMatch = CLOCK_TIME_REGEX.find(trimmed)
+                        if (timeMatch != null) eta = cleanEtaString(timeMatch.value)
+                    }
+                    continue
+                }
+
+                if (isSummaryLine(trimmed)) {
+                    // Check for duration (ETE)
+                    if (ete.isEmpty()) {
+                        val durMatch = DURATION_REGEX.find(trimmed)
+                        if (durMatch != null) {
+                            ete = durMatch.value.trim()
+                        }
+                    }
+
+                    // Check for clock time (ETA)
+                    if (eta.isEmpty()) {
+                        val timeMatch = CLOCK_TIME_REGEX.find(trimmed)
+                        if (timeMatch != null) {
+                            eta = cleanEtaString(timeMatch.value)
+                        }
+                    }
+
+                    // Check for total distance
+                    if (totalDist.isEmpty()) {
+                        val tdMatch = TOTAL_DIST_REGEX.find(trimmed)
+                        if (tdMatch != null) {
+                            totalDist = tdMatch.value.trim()
+                        }
+                    }
+
+                    // Handle bullet-separated trip metrics (e.g. "1 hr 43 min · 44 km · 17:32 ETA")
+                    val parts = trimmed.split(Regex("""[·•|\-]""")).map { it.trim() }.filter { it.isNotEmpty() }
+                    for (part in parts) {
+                        if (ete.isEmpty() && DURATION_REGEX.containsMatchIn(part)) {
+                            val m = DURATION_REGEX.find(part)
+                            if (m != null) ete = m.value.trim()
+                        }
+                        if (eta.isEmpty() && CLOCK_TIME_REGEX.containsMatchIn(part)) {
+                            val m = CLOCK_TIME_REGEX.find(part)
+                            if (m != null) eta = cleanEtaString(m.value)
+                        }
+                        if (totalDist.isEmpty() && TOTAL_DIST_REGEX.containsMatchIn(part)) {
+                            val m = TOTAL_DIST_REGEX.find(part)
+                            if (m != null) totalDist = m.value.trim()
+                        }
+                    }
+                    continue
+                }
+
+                nonSummaryTexts.add(trimmed)
+            }
+
+            // 2. Scan non-summary texts for turn maneuver distance
+            val remainingTexts = mutableListOf<String>()
+            for (text in nonSummaryTexts) {
                 val distMatch = DISTANCE_EXTRACTION_REGEX.find(text)
                 if (distMatch != null && distance.isEmpty()) {
                     distance = distMatch.groupValues[1].trim()
-                    // Strip the distance substring
                     val leftover = text.replace(distMatch.value, "")
                         .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
                         .trim()
@@ -206,64 +309,49 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 }
             }
 
-            // 2. Scan for ETA, ETE, and Total Remaining Distance
-            for (text in candidateTexts) {
-                // Check for clock time (ETA)
-                if (eta.isEmpty()) {
-                    val timeMatch = CLOCK_TIME_REGEX.find(text)
-                    if (timeMatch != null) {
-                        eta = cleanEtaString(timeMatch.value)
-                    }
-                }
-
-                // Check for duration (ETE)
-                if (ete.isEmpty()) {
-                    val durMatch = DURATION_REGEX.find(text)
-                    if (durMatch != null) {
-                        ete = durMatch.value.trim()
-                    }
-                }
-
-                // Check for total distance
-                if (totalDist.isEmpty()) {
-                    val tdMatch = TOTAL_DIST_REGEX.find(text)
-                    if (tdMatch != null && tdMatch.value.trim() != distance) {
-                        totalDist = tdMatch.value.trim()
-                    }
-                }
-
-                // Handle bullet-separated trip metrics (e.g. "15 min · 4.5 km · 17:30")
-                if (text.contains("·") || text.contains("•") || text.contains("|")) {
-                    val parts = text.split(Regex("""[·•|\-]""")).map { it.trim() }.filter { it.isNotEmpty() }
-                    for (part in parts) {
-                        if (ete.isEmpty() && DURATION_REGEX.containsMatchIn(part)) {
-                            ete = part
-                        } else if (eta.isEmpty() && CLOCK_TIME_REGEX.containsMatchIn(part)) {
-                            eta = cleanEtaString(part)
-                        } else if (totalDist.isEmpty() && TOTAL_DIST_REGEX.containsMatchIn(part) && part != distance) {
-                            totalDist = part
-                        }
-                    }
-                }
-            }
-
-            // 3. Extract Road and Sub-Road from remaining texts
+            // 3. Filter road candidates
             val roadCandidates = remainingTexts.filter { text ->
                 val isOnlyTime = CLOCK_TIME_REGEX.matches(text)
                 val isOnlyDur = DURATION_REGEX.matches(text)
                 val isOnlyDist = DISTANCE_EXTRACTION_REGEX.matches(text) || TOTAL_DIST_REGEX.matches(text)
                 val isEtaString = text.startsWith("ETA", ignoreCase = true) || text.startsWith("Tiba", ignoreCase = true)
-                !isOnlyTime && !isOnlyDur && !isOnlyDist && !isEtaString && text != distance
+                val isFrameworkMethod = RemoteViewsExtractor.IGNORED_FRAMEWORK_METHOD_NAMES.contains(text.trim())
+                !isOnlyTime && !isOnlyDur && !isOnlyDist && !isEtaString && !isFrameworkMethod && text != distance
             }
 
+            // 4. Resolve Road and Sub-Road
             if (roadCandidates.isNotEmpty()) {
-                nextRoad = roadCandidates[0]
-                if (roadCandidates.size > 1) {
-                    nextRoadSub = roadCandidates[1]
+                val primary = roadCandidates[0]
+                val maneuverMatch = MANEUVER_SPLIT_REGEX.find(primary)
+                val towardMatch = TOWARD_PREFIX_REGEX.find(primary)
+
+                when {
+                    maneuverMatch != null -> {
+                        val maneuver = maneuverMatch.groupValues[1].trim()
+                            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                        nextRoad = maneuverMatch.groupValues[2].trim()
+                        nextRoadSub = maneuver
+                    }
+                    towardMatch != null -> {
+                        nextRoad = towardMatch.groupValues[1].trim()
+                        if (roadCandidates.size > 1) {
+                            nextRoadSub = roadCandidates[1]
+                        } else {
+                            val prefix = towardMatch.value.substringBefore(nextRoad).trim()
+                                .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                            nextRoadSub = prefix.ifEmpty { "Toward" }
+                        }
+                    }
+                    else -> {
+                        nextRoad = primary
+                        if (roadCandidates.size > 1) {
+                            nextRoadSub = roadCandidates[1]
+                        }
+                    }
                 }
             }
 
-            // 4. Fallback for ongoing navigation notification without explicit road text
+            // 5. Fallback for ongoing navigation notification without explicit road text
             if (nextRoad.isEmpty()) {
                 if (distance.isNotEmpty()) {
                     nextRoad = "Navigating route"
@@ -274,7 +362,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 }
             }
 
-            // 5. Maneuver Icon Resolution
+            // 6. Maneuver Icon Resolution
             var finalBitmap: Bitmap? = extractIcon(notification, context, appSourceContext)
             if (finalBitmap == null && candidateBitmaps.isNotEmpty()) {
                 finalBitmap = candidateBitmaps.first()
@@ -282,7 +370,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
 
             // If still null, synthesize arrow based on keywords in all candidate texts
             if (finalBitmap == null) {
-                val combinedText = candidateTexts.joinToString(" ").lowercase(Locale.ROOT)
+                val combinedText = (candidateTexts + listOf(nextRoad, nextRoadSub)).joinToString(" ").lowercase(Locale.ROOT)
                 finalBitmap = when {
                     combinedText.contains("roundabout") || combinedText.contains("bundaran") || combinedText.contains("circle") -> {
                         BitmapHelper.createRoundaboutBitmap()
@@ -293,7 +381,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                     combinedText.contains("right") || combinedText.contains("kanan") || combinedText.contains("droite") || combinedText.contains("rechts") -> {
                         BitmapHelper.createTurnRightBitmap()
                     }
-                    combinedText.contains("straight") || combinedText.contains("lurus") || combinedText.contains("terus") || combinedText.contains("ahead") -> {
+                    combinedText.contains("straight") || combinedText.contains("lurus") || combinedText.contains("terus") || combinedText.contains("ahead") || combinedText.contains("toward") || combinedText.contains("ke arah") -> {
                         BitmapHelper.createStraightBitmap()
                     }
                     else -> BitmapHelper.createStraightBitmap()
@@ -318,7 +406,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
         }
 
         private fun cleanEtaString(raw: String): String {
-            return raw.replace(Regex("""(?i)\b(eta|tiba|llegada|ankunft)\b"""), "")
+            return raw.replace(Regex("""(?i)\b(eta|tiba|llegada|ankunft|arrival)\b"""), "")
                 .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
                 .trim()
         }
@@ -446,7 +534,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             if (navState != null) {
                 DebugLogger.log(
                     "MAPS_PARSED",
-                    "Parsed -> Dist='${navState.distanceToTurn}' | Road='${navState.nextRoad}' | Sub='${navState.nextRoadSub}' | ETA='${navState.eta}'",
+                    "Parsed -> Dist='${navState.distanceToTurn}' | Road='${navState.nextRoad}' | Sub='${navState.nextRoadSub}' | ETA='${navState.eta}' | ETE='${navState.ete}' | Total='${navState.totalDistance}'",
                     DebugLogger.Level.NAV
                 )
                 broadcastNavigationState(applicationContext, navState)

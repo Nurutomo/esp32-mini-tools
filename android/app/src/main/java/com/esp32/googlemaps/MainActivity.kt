@@ -198,9 +198,9 @@ class MainActivity : AppCompatActivity() {
         initDebugLogView()
 
         val appVersionName = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.5"
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.6"
         } catch (_: Exception) {
-            "1.0.5"
+            "1.0.6"
         }
         binding.badgeAppVersion.text = "v$appVersionName"
 

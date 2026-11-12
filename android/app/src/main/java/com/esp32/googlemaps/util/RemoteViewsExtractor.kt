@@ -19,6 +19,13 @@ object RemoteViewsExtractor {
      * Pure in-memory reflection extractor.
      * Operates in sub-millisecond time without view inflation, IPC, or recoverBuilder calls.
      */
+    val IGNORED_FRAMEWORK_METHOD_NAMES = setOf(
+        "setText", "setVisibility", "setBackgroundColor", "setImageBitmap",
+        "setImageViewBitmap", "setImageResource", "setTextColor", "setCharSequence",
+        "setInt", "setBoolean", "setLong", "setFloat", "setDouble", "setUri",
+        "setImageURI", "setImageIcon", "setAdjustViewBounds", "setMaxHeight", "setMaxWidth"
+    )
+
     fun extract(notification: Notification, context: Context, appSourceContext: Context): ExtractedData {
         val allTexts = mutableListOf<String>()
         val allBitmaps = mutableListOf<Bitmap>()
@@ -127,11 +134,14 @@ object RemoteViewsExtractor {
                     }
 
                     // Pure in-memory extraction (no IPC, no network, no disk)
-                    if (v is CharSequence && v.toString().isNotBlank()) {
-                        val s = v.toString().trim()
-                        if (s.isNotEmpty()) outTexts.add(s)
-                    } else if (v is Bitmap) {
-                        outBitmaps.add(v)
+                    // Only extract content text values, never reflection metadata or method names
+                    if (name != "methodName" && name != "signature" && name != "type") {
+                        if (v is CharSequence && v.toString().isNotBlank()) {
+                            val s = v.toString().trim()
+                            if (s.isNotEmpty() && !IGNORED_FRAMEWORK_METHOD_NAMES.contains(s)) {
+                                outTexts.add(s)
+                            }
+                        }
                     }
                 } catch (_: Throwable) {}
             }
