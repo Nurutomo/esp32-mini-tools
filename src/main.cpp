@@ -4,15 +4,18 @@
 #include "display_manager.h"
 #include "bluetooth_manager.h"
 #include "ui_manager.h"
-#include "ui_display.h"
+#include "ui.h"
+#include "ui/buzzer.h"
+#include "ui/settings.h"
 
 namespace {
 
 constexpr char kDeviceName[] = "ESP32-OLED";
 constexpr uint32_t kBlinkDelayMs = 250;
-constexpr uint32_t kDisplayIntervalMs = 50;
+constexpr uint32_t kDisplayIntervalMs = 25;
 constexpr uint8_t kDefaultAnalogInputPin = 0;
-constexpr uint32_t kAnalogReadIntervalMs = 50;
+constexpr uint8_t kDefaultBuzzerPin = 10;
+constexpr uint32_t kAnalogReadIntervalMs = 25;
 constexpr size_t kSerialCommandSize = 48;
 
 volatile uint8_t gRequestedAnalogPin = kDefaultAnalogInputPin;
@@ -36,6 +39,16 @@ void analogInputTask(void* parameter) {
   }
 }
 
+bool isValidOutputPin(long pin) {
+#if defined(CONFIG_IDF_TARGET_ESP32C3)
+  return pin >= 0 && pin <= 21;
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+  return pin >= 0 && pin <= 48;
+#else
+  return pin >= 0 && pin <= 33;
+#endif
+}
+
 bool isAdcCapablePin(long pin) {
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
   return pin >= 0 && pin <= 5;
@@ -47,6 +60,29 @@ bool isAdcCapablePin(long pin) {
 }
 
 void processSerialCommand(const char* command) {
+  if (strcmp(command, "save") == 0) {
+    const ui::State& state = ui::state();
+    if (ui::settings::save(state.pins)) Serial.println("Settings saved to flash");
+    else Serial.println("Failed to save settings");
+    return;
+  }
+  if (strcmp(command, "beep") == 0) {
+    ui::buzzer::beep(2000, 150);
+    Serial.println("Buzzer test beep");
+    return;
+  }
+  if (strncmp(command, "bpin ", 5) == 0) {
+    char* end = nullptr;
+    const long pin = strtol(command + 5, &end, 10);
+    if (end == command + 5 || *end != '\0' || !isValidOutputPin(pin) ||
+        pin == gActiveAnalogPin || pin == OLED_SDA_PIN || pin == OLED_SCL_PIN || pin == LED_PIN) {
+      Serial.println("Usage: bpin <available output GPIO>");
+      return;
+    }
+    ui::setBuzzerPin(static_cast<uint8_t>(pin));
+    Serial.printf("Buzzer pin set to GPIO %ld\n", pin);
+    return;
+  }
   if (strncmp(command, "apin ", 5) == 0) {
     char* end = nullptr;
     const long pin = strtol(command + 5, &end, 10);
@@ -54,13 +90,19 @@ void processSerialCommand(const char* command) {
       Serial.println("Usage: apin <ADC-capable GPIO> (valid pins vary by board)");
       return;
     }
+    if (pin == ui::buzzer::pin() || pin == OLED_SDA_PIN || pin == OLED_SCL_PIN || pin == LED_PIN) {
+      Serial.println("ADC pin conflicts with buzzer, OLED, or LED GPIO");
+      return;
+    }
     gRequestedAnalogPin = static_cast<uint8_t>(pin);
+    ui::setAnalogButtonPin(static_cast<uint8_t>(pin));
     Serial.printf("Analog input pin requested: GPIO %ld\n", pin);
     return;
   }
   if (strcmp(command, "apin?") == 0 || strcmp(command, "help") == 0) {
     Serial.printf("Analog input: GPIO %u, value %u\n", gActiveAnalogPin, gAnalogInputValue);
-    Serial.println("Change with: apin <GPIO number> (valid ADC GPIO depends on board)");
+    Serial.printf("Buzzer output: GPIO %u\n", ui::buzzer::pin());
+    Serial.println("Commands: apin <GPIO>, bpin <GPIO>, save, beep");
     return;
   }
   if (command[0] != '\0') {
@@ -110,7 +152,10 @@ void setup() {
 
   turnLedOff();
 
-  pinMode(kDefaultAnalogInputPin, INPUT);
+  ui::begin();
+  gRequestedAnalogPin = ui::state().pins.analogButton;
+  gActiveAnalogPin = ui::state().pins.analogButton;
+  pinMode(gActiveAnalogPin, INPUT);
   xTaskCreate(
       analogInputTask,
       "analog-input",
@@ -143,11 +188,10 @@ void setup() {
     Serial.println("[I2C] OLED not detected; will retry I2C hotplug detection.");
   }
 
-  // Initialize the button/menu UI and Bluetooth.
-  ui::begin();
+  // Initialize Bluetooth after UI configuration has loaded.
   initBluetooth(kDeviceName, onBluetoothPacket);
-  Serial.printf("Analog input pin: GPIO %u. Type 'apin?' for value/help, 'apin <GPIO>' to change.\n",
-                gActiveAnalogPin);
+  Serial.printf("Analog input: GPIO %u. Buzzer: GPIO %u. Commands: apin <GPIO>, bpin <GPIO>, apin?\n",
+                gActiveAnalogPin, ui::buzzer::pin());
 }
 
 void loop() {
@@ -160,7 +204,6 @@ void loop() {
   // The analog-input task samples independently; decode the resistor ladder for UI input.
   const uint16_t analogValue = gAnalogInputValue;
   ui::update(analogValue, now);
-  const ui::Button button = ui::detectButton(analogValue);
   const ui::State& uiState = ui::state();
 
   // Probe/reconnect OLED periodically, or blink LED while it is absent.
@@ -172,13 +215,8 @@ void loop() {
       lastDisplayMs = now;
       cycleCount++;
 
-      if (uiState.buttonMonitorOpen) {
-        ui::display::renderButtonMonitor(analogValue, gActiveAnalogPin, ui::buttonLabel(button));
-      } else if (uiState.menuOpen) {
-        ui::display::renderMenu(uiState.selectedItem);
-      } else {
-        updateDisplay(getBluetoothStatus(), getLastTextMessage(), cycleCount);
-      }
+      ui::renderScreen(uiState, analogValue, gActiveAnalogPin, getBluetoothStatus(),
+                       getLastTextMessage(), getNavigationData().speed, cycleCount);
 
       // Diagnostic logging every 2 seconds
       static uint32_t lastLogMs = 0;

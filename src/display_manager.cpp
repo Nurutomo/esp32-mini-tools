@@ -1,5 +1,6 @@
 #include "display_manager.h"
-#include "display_manager_internal.h"
+#include "ui/display_internal.h"
+#include "ui/settings.h"
 #include "config.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -362,42 +363,33 @@ void renderStatusScreen(const char* statusText, const char* btMessage, int speed
   handleFlashEffect();
 }
 
-void renderMenuScreen(uint8_t selectedItem, const char* pageTitle, const char* pageBody) {
+namespace ui::display {
+
+void begin() {
+  if (!gDisplayReady) return;
+  gDisplay.clearDisplay();
+  gDisplay.display();
+}
+
+void settings(const ui::settings::Pins& pins, uint8_t selectedOption) {
   if (!gDisplayReady) return;
   prepareForI2C();
   gDisplay.clearDisplay();
   gDisplay.setTextColor(SSD1306_WHITE);
   gDisplay.setTextSize(1);
-  gDisplay.setTextWrap(false);
   gDisplay.setCursor(2, 2);
-  gDisplay.print(pageTitle);
+  gDisplay.print("Pin settings");
   gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
-
-  if (pageBody != nullptr && pageBody[0] != '\0') {
-    gDisplay.setCursor(2, 18);
-    gDisplay.print(pageBody);
-  } else {
-    static const char* const kItems[] = {"Navigation", "Button monitor", "About"};
-    constexpr uint8_t kItemCount = sizeof(kItems) / sizeof(kItems[0]);
-    for (uint8_t i = 0; i < kItemCount; ++i) {
-      const int16_t y = 19 + i * 14;
-      if (i == selectedItem) {
-        gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 12, 2, SSD1306_WHITE);
-        gDisplay.setTextColor(SSD1306_BLACK);
-      } else {
-        gDisplay.setTextColor(SSD1306_WHITE);
-      }
-      gDisplay.setCursor(5, y + 1);
-      gDisplay.print(kItems[i]);
-    }
-  }
-  gDisplay.setTextColor(SSD1306_WHITE);
-  gDisplay.setCursor(2, 56);
-  gDisplay.print("Btn1/3 Move  Btn2 Select");
+  gDisplay.setCursor(2, 23);
+  gDisplay.printf("%c Buttons GPIO %u", selectedOption == 0 ? '>' : ' ', pins.analogButton);
+  gDisplay.setCursor(2, 37);
+  gDisplay.printf("%c Buzzer GPIO %u", selectedOption == 1 ? '>' : ' ', pins.buzzer);
+  gDisplay.setCursor(2, 55);
+  gDisplay.print("1/3 Change  2 Save");
   gDisplay.display();
 }
 
-void renderButtonMonitor(uint16_t analogValue, uint8_t activePin, const char* buttonLabel) {
+void buttonMonitor(uint16_t analogValue, uint8_t activePin, const char* label) {
   if (!gDisplayReady) return;
   prepareForI2C();
   gDisplay.clearDisplay();
@@ -410,9 +402,53 @@ void renderButtonMonitor(uint16_t analogValue, uint8_t activePin, const char* bu
   gDisplay.printf("GPIO %u  ADC %u", activePin, analogValue);
   gDisplay.setTextSize(2);
   gDisplay.setCursor(2, 39);
-  gDisplay.print(buttonLabel);
+  gDisplay.print(label);
   gDisplay.display();
 }
+
+void text(const char* title, const char* body) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(2, 3);
+  gDisplay.print(title);
+  gDisplay.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+  gDisplay.setCursor(2, 23);
+  gDisplay.print(body);
+  gDisplay.display();
+}
+
+void menu(uint8_t selectedItem) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
+  gDisplay.setCursor(2, 2);
+  gDisplay.print("Main menu");
+  gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
+  static const char* const items[] = {"Navigation", "Button monitor", "About", "Bluetooth info", "Settings"};
+  for (uint8_t i = 0; i < 5; ++i) {
+    const int16_t y = 19 + i * 10;
+    if (i == selectedItem) {
+      gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 10, 2, SSD1306_WHITE);
+      gDisplay.setTextColor(SSD1306_BLACK);
+    } else {
+      gDisplay.setTextColor(SSD1306_WHITE);
+    }
+    gDisplay.setCursor(5, y);
+    gDisplay.print(items[i]);
+  }
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setCursor(2, 56);
+  gDisplay.print("Btn1/3 Move  Btn2 Select");
+  gDisplay.display();
+}
+
+}  // namespace ui::display
 
 void updateDisplay(const char* statusText, const char* btMessage, uint32_t cycle) {
   if (!gDisplayReady) return;

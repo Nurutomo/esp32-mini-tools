@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Arduino.h>
 #include <stdint.h>
+#include "ui/settings.h"
 
 namespace ui {
 
@@ -13,16 +13,26 @@ enum class Button : uint8_t {
   TwoAndThree = 0x06,
 };
 
-struct State {
-  bool menuOpen = false;
-  bool buttonMonitorOpen = false;
-  uint8_t selectedItem = 0;
+enum class Screen : uint8_t {
+  Navigation,
+  Menu,
+  ButtonMonitor,
+  About,
+  BluetoothInfo,
+  Settings,
 };
 
-Button detectButton(uint16_t analogValue);
-const char* buttonLabel(Button button);
+struct State {
+  Screen screen = Screen::Navigation;
+  uint8_t selectedItem = 0;
+  uint8_t settingsOption = 0;
+  settings::Pins pins{settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin};
+};
+
 void begin();
 void update(uint16_t analogValue, uint32_t now);
+void setAnalogButtonPin(uint8_t pin);
+void setBuzzerPin(uint8_t pin);
 const State& state();
 
 }  // namespace ui

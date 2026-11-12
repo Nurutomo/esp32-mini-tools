@@ -1,14 +1,15 @@
 #include "ui_manager.h"
 
-#include "display_manager.h"
+#include "ui/analog_button.h"
+#include "ui/menu.h"
+#include "ui/buzzer.h"
+#include "ui/settings.h"
 
 namespace ui {
 namespace {
 
-constexpr uint16_t kButtonTolerance = 180;
 constexpr uint32_t kSelectLongPressMs = 800;
-constexpr uint32_t kButtonDebounceMs = 180;
-constexpr uint8_t kMenuItemCount = 3;
+constexpr uint32_t kButtonDebounceMs = 120;
 
 State gState;
 uint32_t gLastActionMs = 0;
@@ -16,64 +17,60 @@ uint32_t gButtonTwoDownMs = 0;
 Button gPreviousButton = Button::None;
 bool gButtonTwoLongHandled = false;
 
-bool nearAdcValue(uint16_t value, uint16_t target) {
-  const uint16_t delta = value > target ? value - target : target - value;
-  return delta <= kButtonTolerance;
-}
-
 void select() {
-  if (gState.buttonMonitorOpen) {
-    gState.buttonMonitorOpen = false;
-    gState.menuOpen = true;
-  } else if (!gState.menuOpen) {
-    gState.menuOpen = true;
-  } else if (gState.selectedItem == 0) {
-    gState.menuOpen = false;
-  } else if (gState.selectedItem == 1) {
-    gState.buttonMonitorOpen = true;
+  buzzer::beep(2200, 35);
+  if (gState.screen == Screen::Settings) {
+    if (gState.settingsOption == 0) gState.settingsOption = 1;
+    else {
+      if (!settings::save(gState.pins)) buzzer::beep(500, 250);
+      gState.screen = Screen::Menu;
+    }
+    return;
+  }
+  if (gState.screen != Screen::Menu) return;
+  switch (gState.selectedItem) {
+    case 0: gState.screen = Screen::Navigation; break;
+    case 1: gState.screen = Screen::ButtonMonitor; break;
+    case 2: gState.screen = Screen::About; break;
+    case 3: gState.screen = Screen::BluetoothInfo; break;
+    case 4: gState.screen = Screen::Settings; break;
   }
 }
 
 void back() {
-  if (gState.buttonMonitorOpen) {
-    gState.buttonMonitorOpen = false;
-  } else {
-    gState.menuOpen = false;
+  buzzer::beep(1400, 70);
+  if (gState.screen == Screen::Settings) {
+    gState.screen = Screen::Menu;
+    return;
+  }
+  switch (gState.screen) {
+    case Screen::ButtonMonitor:
+    case Screen::About:
+    case Screen::BluetoothInfo:
+      gState.screen = Screen::Menu;
+      break;
+    default:
+      gState.screen = Screen::Navigation;
+      break;
   }
 }
 
 }  // namespace
 
-Button detectButton(uint16_t value) {
-  if (nearAdcValue(value, 4095)) return Button::One;
-  if (nearAdcValue(value, 2700)) return Button::TwoAndThree;
-  if (nearAdcValue(value, 2270)) return Button::Two;
-  if (nearAdcValue(value, 1410)) return Button::Three;
-  return Button::None;
-}
-
-const char* buttonLabel(Button button) {
-  switch (button) {
-    case Button::One: return "BTN 1";
-    case Button::Two: return "BTN 2";
-    case Button::Three: return "BTN 3";
-    case Button::TwoAndThree: return "BTN 2+3";
-    default: return "NONE";
-  }
-}
-
 void begin() {
   gState = State{};
+  settings::load(gState.pins, settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin);
+  buzzer::begin(gState.pins.buzzer);
   gLastActionMs = 0;
   gButtonTwoDownMs = 0;
   gPreviousButton = Button::None;
   gButtonTwoLongHandled = false;
+  resetAnalogButton();
 }
 
 void update(uint16_t analogValue, uint32_t now) {
-  const Button button = detectButton(analogValue);
-  const bool justPressedTwo = button == Button::Two && gPreviousButton != Button::Two;
-  if (justPressedTwo) {
+  const Button button = readAnalogButton(analogValue);
+  if (button == Button::Two && gPreviousButton != Button::Two) {
     gButtonTwoDownMs = now;
     gButtonTwoLongHandled = false;
   }
@@ -93,19 +90,35 @@ void update(uint16_t analogValue, uint32_t now) {
     gButtonTwoLongHandled = false;
   }
 
-  if (gState.menuOpen && !gState.buttonMonitorOpen &&
-      now - gLastActionMs >= kButtonDebounceMs) {
-    // ADC 4095 is the top key; ADC 1410 is the bottom key.
-    if (button == Button::One && gState.selectedItem > 0) {
-      --gState.selectedItem;
+  if (now - gLastActionMs >= kButtonDebounceMs) {
+    if (gState.screen == Screen::Menu && button == Button::One) {
+      menu::moveDown(gState.selectedItem);
       gLastActionMs = now;
-    } else if (button == Button::Three && gState.selectedItem + 1 < kMenuItemCount) {
-      ++gState.selectedItem;
+    } else if (gState.screen == Screen::Menu && button == Button::Three) {
+      menu::moveUp(gState.selectedItem);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::Settings && button == Button::One) {
+      settings::edit(gState.pins, gState.settingsOption, 1, 21);
+      buzzer::setPin(gState.pins.buzzer);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::Settings && button == Button::Three) {
+      if (gState.settingsOption == 0) gState.settingsOption = 1;
+      else settings::edit(gState.pins, gState.settingsOption, -1, 21);
+      buzzer::setPin(gState.pins.buzzer);
       gLastActionMs = now;
     }
   }
 
   gPreviousButton = button;
+}
+
+void setAnalogButtonPin(uint8_t pin) {
+  gState.pins.analogButton = pin;
+}
+
+void setBuzzerPin(uint8_t pin) {
+  gState.pins.buzzer = pin;
+  buzzer::setPin(pin);
 }
 
 const State& state() {
