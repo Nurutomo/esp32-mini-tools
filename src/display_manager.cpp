@@ -143,9 +143,9 @@ void renderNavHud(const NavigationData& nav) {
 
   // Turn distance remains blank in cruise mode; never substitute route distance here.
   if (nav.distance[0] != '\0') {
-    const uint8_t distanceSize = strlen(nav.distance) <= 5 ? 2 : 1;
+    const uint8_t distanceSize = strlen(nav.distance) <= 5 ? 3 : 2;
     gDisplay.setTextSize(distanceSize);
-    gDisplay.setCursor(kTextX, distanceSize == 2 ? 5 : 10);
+    gDisplay.setCursor(kTextX, distanceSize == 2 ? 5 : 5);
     gDisplay.print(nav.distance);
   }
 
@@ -154,12 +154,12 @@ void renderNavHud(const NavigationData& nav) {
   if (nav.speed >= 0) {
     char speedText[8];
     snprintf(speedText, sizeof(speedText), "%d", nav.speed);
-    const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 6 + 8);
+    const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 6 + 16);
     const int16_t speedX = kSpeedRight - speedWidth;
     gDisplay.drawRoundRect(speedX, 2, speedWidth, 26, 3, SSD1306_WHITE);
-    gDisplay.setCursor(speedX + 4, 5);
+    gDisplay.setCursor(speedX + 2, 5);
     gDisplay.print(speedText);
-    gDisplay.setCursor(speedX + 4, 17);
+    gDisplay.setCursor(speedX + 2, 17);
     gDisplay.print("km/h");
     if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
       gDisplay.drawRect(speedX - 1, 1, speedWidth + 2, 28, SSD1306_WHITE);
@@ -184,7 +184,7 @@ void renderNavHud(const NavigationData& nav) {
   }
 
   // A restrained second line: maneuver cue, or concise ETA/ETE/remaining distance.
-  gDisplay.setCursor(2, 52);
+  gDisplay.setCursor(2, 46);
   if (nav.nextRoadSub[0] != '\0') {
     gDisplay.print(nav.nextRoadSub);
   } else if (nav.ete[0] != '\0' && nav.totalDistance[0] != '\0') {
