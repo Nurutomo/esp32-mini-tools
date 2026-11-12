@@ -24,14 +24,18 @@ object NotificationDumpHelper {
         root.put("isListenerConnected", GoogleMapsNotificationListener.isConnected())
         root.put("isNotificationAccessGranted", PermissionHelper.isNotificationServiceEnabled(context))
 
+        if (notifications == null) {
+            root.put("warning", "No active notifications returned. If notifications are present in the status bar, ensure Notification Access permission is enabled for this app in Android Settings.")
+        }
+
         val array = JSONArray()
         if (notifications != null) {
             for (sbn in notifications) {
                 try {
                     array.put(dumpNotification(sbn, context))
-                } catch (e: Exception) {
+                } catch (t: Throwable) {
                     val errObj = JSONObject()
-                    errObj.put("error", "Failed to dump notification pkg=${sbn.packageName} id=${sbn.id}: ${e.message}")
+                    errObj.put("error", "Failed to dump notification pkg=${sbn.packageName} id=${sbn.id}: ${t.message}")
                     array.put(errObj)
                 }
             }
@@ -81,8 +85,8 @@ object NotificationDumpHelper {
             for (key in extras.keySet()) {
                 try {
                     val value = extras.get(key)
-                    extrasObj.put(key, formatExtraValue(value))
-                } catch (e: Exception) {
+                    extrasObj.put(key, formatExtraValue(value, 0))
+                } catch (e: Throwable) {
                     extrasObj.put(key, "[Error reading extra: ${e.message}]")
                 }
             }
@@ -99,22 +103,29 @@ object NotificationDumpHelper {
         obj.put("actions", actionsArray)
 
         // RemoteViews extraction inspection
-        val appSourceContext = try {
-            context.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
-        } catch (_: Exception) {
-            context
-        }
-        val rvData = RemoteViewsExtractor.extract(n, context, appSourceContext)
-        val rvObj = JSONObject()
-        val rvTextsArray = JSONArray()
-        rvData.texts.forEach { rvTextsArray.put(it) }
-        rvObj.put("extractedTexts", rvTextsArray)
-        rvObj.put("extractedBitmapsCount", rvData.bitmaps.size)
+        try {
+            val appSourceContext = try {
+                context.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+            } catch (_: Exception) {
+                context
+            }
+            val rvData = RemoteViewsExtractor.extract(n, context, appSourceContext)
+            val rvObj = JSONObject()
+            val rvTextsArray = JSONArray()
+            rvData.texts.forEach { rvTextsArray.put(it) }
+            rvObj.put("extractedTexts", rvTextsArray)
+            rvObj.put("extractedBitmapsCount", rvData.bitmaps.size)
 
-        val debugActionsArray = JSONArray()
-        rvData.actionsDebug.forEach { debugActionsArray.put(it) }
-        rvObj.put("actionsDebug", debugActionsArray)
-        obj.put("remoteViews", rvObj)
+            val debugActionsArray = JSONArray()
+            rvData.actionsDebug.take(35).forEach { debugActionsArray.put(it) }
+            if (rvData.actionsDebug.size > 35) {
+                debugActionsArray.put("... (${rvData.actionsDebug.size - 35} more actions)")
+            }
+            rvObj.put("actionsDebug", debugActionsArray)
+            obj.put("remoteViews", rvObj)
+        } catch (t: Throwable) {
+            obj.put("remoteViewsError", t.message ?: "Unknown extraction error")
+        }
 
         // Navigation parse analysis
         if (isNavApp) {
@@ -135,7 +146,7 @@ object NotificationDumpHelper {
                     navAnalysis.put("parseSuccess", false)
                     navAnalysis.put("reason", "Parser returned null (no distance or road text found in notification)")
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 navAnalysis.put("parseSuccess", false)
                 navAnalysis.put("error", e.message ?: "Unknown parse error")
             }
@@ -155,33 +166,40 @@ object NotificationDumpHelper {
         return list.joinToString("|")
     }
 
-    private fun formatExtraValue(value: Any?): Any {
+    private fun formatExtraValue(value: Any?, depth: Int = 0): Any {
         if (value == null) return JSONObject.NULL
-        return when (value) {
-            is String -> value
-            is Number -> value
-            is Boolean -> value
-            is CharSequence -> value.toString()
-            is Array<*> -> {
-                val arr = JSONArray()
-                value.forEach { item -> arr.put(formatExtraValue(item)) }
-                arr
-            }
-            is Collection<*> -> {
-                val arr = JSONArray()
-                value.forEach { item -> arr.put(formatExtraValue(item)) }
-                arr
-            }
-            is Bundle -> {
-                val bObj = JSONObject()
-                for (k in value.keySet()) {
-                    bObj.put(k, formatExtraValue(value.get(k)))
+        if (depth > 4) return "[Max Depth Reached]"
+        return try {
+            when (value) {
+                is String -> value
+                is Number -> value
+                is Boolean -> value
+                is CharSequence -> value.toString()
+                is Array<*> -> {
+                    val arr = JSONArray()
+                    value.take(15).forEach { item -> arr.put(formatExtraValue(item, depth + 1)) }
+                    if (value.size > 15) arr.put("... (${value.size - 15} more items)")
+                    arr
                 }
-                bObj
+                is Collection<*> -> {
+                    val arr = JSONArray()
+                    value.take(15).forEach { item -> arr.put(formatExtraValue(item, depth + 1)) }
+                    if (value.size > 15) arr.put("... (${value.size - 15} more items)")
+                    arr
+                }
+                is Bundle -> {
+                    val bObj = JSONObject()
+                    for (k in value.keySet()) {
+                        bObj.put(k, formatExtraValue(value.get(k), depth + 1))
+                    }
+                    bObj
+                }
+                is Bitmap -> "[Bitmap: ${value.width}x${value.height}]"
+                is android.graphics.drawable.Icon -> "[Icon: $value]"
+                else -> value.toString().take(200)
             }
-            is Bitmap -> "[Bitmap: ${value.width}x${value.height}]"
-            is android.graphics.drawable.Icon -> "[Icon: $value]"
-            else -> value.toString()
+        } catch (t: Throwable) {
+            "[Error reading value: ${t.message}]"
         }
     }
 }

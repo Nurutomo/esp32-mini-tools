@@ -207,11 +207,13 @@ jobs:
           # 1. Copy web flasher UI
           cp web/index.html "$site_dir/index.html"
           build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          printf '{"commit":"%s","builtAt":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" > "$site_dir/commit.json"
+          app_version=$(grep -o 'versionName "[^"]*"' android/app/build.gradle | cut -d'"' -f2)
+          printf '{"commit":"%s","builtAt":"%s","appVersion":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" "$app_version" > "$site_dir/commit.json"
 
-          # 2. Copy Android APK
+          # 2. Copy Android APK (both versioned filename and generic fallback)
+          cp downloaded-apk/app-release.apk "$site_dir/apk/esp32-google-maps-v${app_version}.apk"
           cp downloaded-apk/app-release.apk "$site_dir/apk/esp32-google-maps.apk"
-          echo "Successfully placed APK at $site_dir/apk/esp32-google-maps.apk"
+          echo "Successfully placed APK at $site_dir/apk/esp32-google-maps-v${app_version}.apk and $site_dir/apk/esp32-google-maps.apk"
 
           # 3. Copy firmware binaries and generate manifests
           write_manifest() {

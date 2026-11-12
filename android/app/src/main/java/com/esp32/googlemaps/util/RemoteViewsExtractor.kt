@@ -42,7 +42,7 @@ object RemoteViewsExtractor {
             if (seenRv.contains(identity)) continue
             seenRv.add(identity)
 
-            extractViaReflection(rv, allTexts, allBitmaps, actionsDebug)
+            extractViaReflection(rv, allTexts, allBitmaps, actionsDebug, seenRv, 0)
         }
 
         // Deduplicate texts while preserving original insertion order
@@ -61,8 +61,11 @@ object RemoteViewsExtractor {
         rv: RemoteViews,
         outTexts: MutableList<String>,
         outBitmaps: MutableList<Bitmap>,
-        outDebug: MutableList<String>
+        outDebug: MutableList<String>,
+        seenRv: MutableSet<Int>,
+        depth: Int
     ) {
+        if (depth > 3) return
         try {
             val rvClass = rv.javaClass
             val mActionsField = findField(rvClass, "mActions") ?: return
@@ -73,7 +76,7 @@ object RemoteViewsExtractor {
 
             for (action in actions) {
                 if (action == null) continue
-                inspectAction(action, outTexts, outBitmaps, outDebug)
+                inspectAction(action, outTexts, outBitmaps, outDebug, seenRv, depth)
             }
         } catch (e: Throwable) {
             outDebug.add("extractViaReflection error: ${e.message}")
@@ -84,7 +87,9 @@ object RemoteViewsExtractor {
         action: Any,
         outTexts: MutableList<String>,
         outBitmaps: MutableList<Bitmap>,
-        outDebug: MutableList<String>
+        outDebug: MutableList<String>,
+        seenRv: MutableSet<Int>,
+        depth: Int
     ) {
         val actionClass = action.javaClass
         var currentMethodName: String? = null
@@ -97,6 +102,13 @@ object RemoteViewsExtractor {
                 try {
                     field.isAccessible = true
                     val name = field.name
+
+                    // Crucial: Skip synthetic inner-class outer references (this$0) and parent context
+                    // to prevent infinite reflection loops between RemoteViews and Action instances!
+                    if (name.startsWith("this$") || name == "mApplication" || name == "mActions" || name == "mContext") {
+                        continue
+                    }
+
                     val v = field.get(action) ?: continue
 
                     when {
@@ -104,8 +116,13 @@ object RemoteViewsExtractor {
                         name == "viewId" && v is Int -> viewId = v
                         name == "value" -> foundValue = v
                         name == "bitmap" && v is Bitmap -> outBitmaps.add(v)
-                        name == "nestedViews" && v is RemoteViews -> {
-                            extractViaReflection(v, outTexts, outBitmaps, outDebug)
+                        (name == "nestedViews" || name == "mNestedViews") && v is RemoteViews -> {
+                            if (depth < 3) {
+                                val id = System.identityHashCode(v)
+                                if (seenRv.add(id)) {
+                                    extractViaReflection(v, outTexts, outBitmaps, outDebug, seenRv, depth + 1)
+                                }
+                            }
                         }
                     }
 
@@ -115,8 +132,6 @@ object RemoteViewsExtractor {
                         if (s.isNotEmpty()) outTexts.add(s)
                     } else if (v is Bitmap) {
                         outBitmaps.add(v)
-                    } else if (v is RemoteViews) {
-                        extractViaReflection(v, outTexts, outBitmaps, outDebug)
                     }
                 } catch (_: Throwable) {}
             }
@@ -124,7 +139,12 @@ object RemoteViewsExtractor {
         }
 
         if (currentMethodName != null || foundValue != null) {
-            outDebug.add("Action: method=$currentMethodName, viewId=0x${Integer.toHexString(viewId ?: 0)}, value=$foundValue")
+            val valDisplay = when (foundValue) {
+                is Bitmap -> "[Bitmap ${foundValue.width}x${foundValue.height}]"
+                is CharSequence -> foundValue.take(60).toString()
+                else -> foundValue?.javaClass?.simpleName ?: "null"
+            }
+            outDebug.add("Action: method=$currentMethodName, viewId=0x${Integer.toHexString(viewId ?: 0)}, value=$valDisplay")
         }
     }
 

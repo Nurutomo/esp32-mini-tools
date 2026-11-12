@@ -198,9 +198,9 @@ class MainActivity : AppCompatActivity() {
         initDebugLogView()
 
         val appVersionName = try {
-            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.4"
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.5"
         } catch (_: Exception) {
-            "1.0.4"
+            "1.0.5"
         }
         binding.badgeAppVersion.text = "v$appVersionName"
 
@@ -343,12 +343,18 @@ class MainActivity : AppCompatActivity() {
             binding.btnDumpJson.isEnabled = false
             binding.btnDumpJson.text = "Dumping..."
             lifecycleScope.launch {
-                val json = withContext(Dispatchers.IO) {
-                    GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+                try {
+                    val json = withContext(Dispatchers.IO) {
+                        GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+                    }
+                    showDumpJsonDialog(json)
+                } catch (t: Throwable) {
+                    DebugLogger.log("DUMP", "Dump failed: ${t.message}", DebugLogger.Level.ERROR)
+                    Toast.makeText(this@MainActivity, "Dump failed: ${t.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    binding.btnDumpJson.isEnabled = true
+                    binding.btnDumpJson.text = getString(R.string.btn_dump_json)
                 }
-                binding.btnDumpJson.isEnabled = true
-                binding.btnDumpJson.text = getString(R.string.btn_dump_json)
-                showDumpJsonDialog(json)
             }
         }
 
@@ -485,20 +491,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun dumpNotificationsAndShowDialog() {
         lifecycleScope.launch {
-            val json = withContext(Dispatchers.IO) {
-                GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+                }
+                showDumpJsonDialog(json)
+            } catch (t: Throwable) {
+                DebugLogger.log("DUMP", "Dump error: ${t.message}", DebugLogger.Level.ERROR)
             }
-            showDumpJsonDialog(json)
         }
     }
 
     private fun showDumpJsonDialog(json: String) {
 
-        // 1. Copy to clipboard immediately
+        // 1. Copy full JSON to clipboard immediately
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Notifications JSON", json))
 
-        // 2. Save to Downloads directory
+        // 2. Save full JSON to Downloads directory
         var savedPath = ""
         try {
             val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -515,9 +525,16 @@ class MainActivity : AppCompatActivity() {
         DebugLogger.log("DUMP", "Exported notifications JSON to $savedPath", DebugLogger.Level.NAV)
         Toast.makeText(this, "Copied JSON to clipboard & saved to $savedPath", Toast.LENGTH_LONG).show()
 
-        // 3. Show dialog for viewing and inspection
+        // 3. Prepare display text (limit to 8,000 characters in the dialog TextView to prevent UI thread layout hang)
+        val displayText = if (json.length > 8000) {
+            json.take(8000) + "\n\n... [TRUNCATED FOR UI DISPLAY: Full ${json.length} characters (${json.length / 1024} KB) copied to clipboard & saved to $savedPath]"
+        } else {
+            json
+        }
+
+        // 4. Show dialog for viewing and inspection
         val msgView = TextView(this).apply {
-            text = json
+            text = displayText
             setPadding(32, 24, 32, 24)
             setTextIsSelectable(true)
             typeface = Typeface.MONOSPACE
@@ -534,9 +551,9 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Active Notifications Dump (JSON)")
             .setView(scrollContainer)
-            .setPositiveButton("Copy Again") { _, _ ->
+            .setPositiveButton("Copy Full JSON") { _, _ ->
                 clipboard.setPrimaryClip(ClipData.newPlainText("Notifications JSON", json))
-                Toast.makeText(this, "JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Full JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
             }
             .setNeutralButton("Share") { _, _ ->
                 val sendIntent = Intent().apply {
