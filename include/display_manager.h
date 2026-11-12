@@ -16,6 +16,8 @@ uint8_t getDisplayAddress();
 
 // Renders either Navigation HUD or Status Screen depending on active state
 void updateDisplay(const char* statusText, const char* btMessage, uint32_t cycle);
+void renderMenuScreen(uint8_t selectedItem, const char* pageTitle, const char* pageBody);
+void renderButtonMonitor(uint16_t analogValue, uint8_t activePin, const char* buttonLabel);
 
 // Direct render methods
 void renderNavHud(const NavigationData& nav);

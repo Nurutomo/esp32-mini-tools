@@ -361,6 +361,58 @@ void renderStatusScreen(const char* statusText, const char* btMessage, int speed
   handleFlashEffect();
 }
 
+void renderMenuScreen(uint8_t selectedItem, const char* pageTitle, const char* pageBody) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
+  gDisplay.setCursor(2, 2);
+  gDisplay.print(pageTitle);
+  gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
+
+  if (pageBody != nullptr && pageBody[0] != '\0') {
+    gDisplay.setCursor(2, 18);
+    gDisplay.print(pageBody);
+  } else {
+    static const char* const kItems[] = {"Navigation", "Button monitor", "About"};
+    constexpr uint8_t kItemCount = sizeof(kItems) / sizeof(kItems[0]);
+    for (uint8_t i = 0; i < kItemCount; ++i) {
+      const int16_t y = 19 + i * 14;
+      if (i == selectedItem) {
+        gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 12, 2, SSD1306_WHITE);
+        gDisplay.setTextColor(SSD1306_BLACK);
+      } else {
+        gDisplay.setTextColor(SSD1306_WHITE);
+      }
+      gDisplay.setCursor(5, y + 1);
+      gDisplay.print(kItems[i]);
+    }
+  }
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setCursor(2, 56);
+  gDisplay.print("Btn1/3 Move  Btn2 Select");
+  gDisplay.display();
+}
+
+void renderButtonMonitor(uint16_t analogValue, uint8_t activePin, const char* buttonLabel) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(2, 3);
+  gDisplay.print("Button monitor");
+  gDisplay.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+  gDisplay.setCursor(2, 23);
+  gDisplay.printf("GPIO %u  ADC %u", activePin, analogValue);
+  gDisplay.setTextSize(2);
+  gDisplay.setCursor(2, 39);
+  gDisplay.print(buttonLabel);
+  gDisplay.display();
+}
+
 void updateDisplay(const char* statusText, const char* btMessage, uint32_t cycle) {
   if (!gDisplayReady) return;
 
