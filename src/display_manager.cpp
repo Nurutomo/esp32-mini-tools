@@ -18,6 +18,90 @@ int8_t gFlashCount = -1;
 uint32_t gLastFlashMs = 0;
 bool gCurrentInvert = false;
 
+// Road-name marquee state
+// GFX text size 1 = 6×8 px per char (5 px glyph + 1 px gap)
+constexpr int16_t kCharW = 6;
+constexpr int16_t kRoadY = 38;
+constexpr int16_t kRoadX = 2;
+constexpr int16_t kRoadW = OLED_WIDTH - kRoadX;      // usable pixels (126)
+constexpr int16_t kScrollPxPerTick = 2;               // pixels scrolled each 500 ms tick
+constexpr uint32_t kScrollPauseMs  = 1500;            // hold at start before scrolling
+
+static char  gScrollRoad[64] = "";
+static int16_t gScrollOffsetPx = 0;                   // how many px we have scrolled left so far
+static uint32_t gScrollStartMs = 0;                   // millis() when this road string first appeared
+static bool  gScrollPaused = true;
+
+// Render one road label line into the OLED buffer.
+// If the text fits, draw it normally.
+// If it is too long, scroll it left one frame at a time, then loop.
+void renderRoadMarquee(const char* road) {
+  const int16_t textW = static_cast<int16_t>(strlen(road)) * kCharW;
+
+  if (textW <= kRoadW) {
+    // Short enough — just draw it, no scrolling needed.
+    if (strcmp(gScrollRoad, road) != 0) {
+      strncpy(gScrollRoad, road, sizeof(gScrollRoad) - 1);
+      gScrollRoad[sizeof(gScrollRoad) - 1] = '\0';
+      gScrollOffsetPx = 0;
+      gScrollStartMs  = millis();
+      gScrollPaused   = false;
+    }
+    gDisplay.setTextSize(1);
+    gDisplay.setTextWrap(false);
+    gDisplay.setCursor(kRoadX, kRoadY);
+    gDisplay.print(road);
+    return;
+  }
+
+  // ── Long road: marquee ───────────────────────────────────────────────────
+  if (strcmp(gScrollRoad, road) != 0) {
+    // New road arrived — reset scroll state.
+    strncpy(gScrollRoad, road, sizeof(gScrollRoad) - 1);
+    gScrollRoad[sizeof(gScrollRoad) - 1] = '\0';
+    gScrollOffsetPx = 0;
+    gScrollStartMs  = millis();
+    gScrollPaused   = true;
+  }
+
+  // Advance scroll offset after the initial pause.
+  const uint32_t elapsed = millis() - gScrollStartMs;
+  if (gScrollPaused && elapsed >= kScrollPauseMs) {
+    gScrollPaused = false;
+  }
+  if (!gScrollPaused) {
+    gScrollOffsetPx += kScrollPxPerTick;
+    // Once the text has fully scrolled off the left edge, loop back.
+    const int16_t maxScroll = textW + kCharW * 2;  // a small gap before looping
+    if (gScrollOffsetPx >= maxScroll) {
+      gScrollOffsetPx = 0;
+      gScrollStartMs  = millis();
+      gScrollPaused   = true;   // pause again at the beginning of the loop
+    }
+  }
+
+  // Draw using a 1-bit canvas so we can clip the region correctly.
+  // Canvas width = full text width; blit only the visible slice into the frame buffer.
+  const int16_t canvasW = textW + kCharW * 2;
+  GFXcanvas1 canvas(canvasW, 8);
+  canvas.setTextSize(1);
+  canvas.setTextWrap(false);
+  canvas.setTextColor(1);
+  canvas.setCursor(0, 0);
+  canvas.print(road);
+
+  // Blit the visible slice [gScrollOffsetPx .. gScrollOffsetPx + kRoadW - 1] onto the display.
+  for (int16_t dx = 0; dx < kRoadW; dx++) {
+    const int16_t srcX = gScrollOffsetPx + dx;
+    if (srcX < 0 || srcX >= canvasW) continue;
+    for (int16_t dy = 0; dy < 8; dy++) {
+      if (canvas.getPixel(srcX, dy)) {
+        gDisplay.drawPixel(kRoadX + dx, kRoadY + dy, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
 uint8_t scanOledAddress() {
   prepareForI2C();
 
@@ -160,7 +244,7 @@ void renderNavHud(const NavigationData& nav) {
     gDisplay.setCursor(speedX + 2, 5);
     gDisplay.print(speedText);
     gDisplay.setCursor(speedX + 2, 17);
-    gDisplay.print("km/h");
+    gDisplay.print("kmh");
     if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
       gDisplay.drawRect(speedX - 1, 1, speedWidth + 2, 28, SSD1306_WHITE);
     }
@@ -169,19 +253,12 @@ void renderNavHud(const NavigationData& nav) {
   // Split the maneuver area from the road/trip details.
   gDisplay.drawFastHLine(0, 33, OLED_WIDTH, SSD1306_WHITE);
 
-  // Road name: fit the single line to the screen rather than drawing off-screen.
+  // Road name: static if it fits, animated marquee if it overflows.
   gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
   const char* road = nav.nextRoad[0] != '\0' ? nav.nextRoad : "Proceed to route";
-  constexpr size_t kRoadLineChars = (OLED_WIDTH - 4) / 6;
-  if (strlen(road) > kRoadLineChars) {
-    char roadLine[kRoadLineChars + 1];
-    snprintf(roadLine, sizeof(roadLine), "%.*s...", static_cast<int>(kRoadLineChars - 3), road);
-    gDisplay.setCursor(2, 38);
-    gDisplay.print(roadLine);
-  } else {
-    gDisplay.setCursor(2, 38);
-    gDisplay.print(road);
-  }
+  renderRoadMarquee(road);
+  gDisplay.setTextWrap(true);
 
   // A restrained second line: maneuver cue, or concise ETA/ETE/remaining distance.
   gDisplay.setCursor(2, 46);
