@@ -68,6 +68,18 @@
             android:foregroundServiceType="connectedDevice|location"
             android:label="ESP32 Navigation Service" />
 
+        <!-- CLI / ADB / Termux Integration Receiver -->
+        <receiver
+            android:name=".receiver.TermuxCommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.esp32.googlemaps.DUMP_NOTIFICATIONS" />
+                <action android:name="com.esp32.googlemaps.REBIND_LISTENER" />
+                <action android:name="com.esp32.googlemaps.SCAN_TRAY" />
+                <action android:name="com.esp32.googlemaps.SIMULATE_NAV" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

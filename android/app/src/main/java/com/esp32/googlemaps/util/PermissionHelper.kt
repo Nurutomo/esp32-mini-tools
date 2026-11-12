@@ -11,15 +11,27 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.esp32.googlemaps.service.GoogleMapsNotificationListener
 
 object PermissionHelper {
 
     fun isNotificationServiceEnabled(context: Context): Boolean {
-        val cn = ComponentName(context, GoogleMapsNotificationListener::class.java)
-        val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
-        return flat != null && flat.contains(cn.flattenToString())
+        try {
+            val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(context)
+            if (enabledPackages.contains(context.packageName)) {
+                return true
+            }
+        } catch (_: Exception) {}
+
+        return try {
+            val cn = ComponentName(context, GoogleMapsNotificationListener::class.java)
+            val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+            flat != null && (flat.contains(cn.flattenToString()) || flat.contains(cn.flattenToShortString()) || flat.contains(context.packageName))
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun openNotificationListenerSettings(context: Context) {

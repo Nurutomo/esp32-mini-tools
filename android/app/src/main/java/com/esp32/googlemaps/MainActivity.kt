@@ -9,14 +9,21 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.esp32.googlemaps.bluetooth.BluetoothController
 import com.esp32.googlemaps.databinding.ActivityMainBinding
 import com.esp32.googlemaps.model.NavigationState
@@ -26,6 +33,7 @@ import com.esp32.googlemaps.util.BitmapHelper
 import com.esp32.googlemaps.util.DebugLogger
 import com.esp32.googlemaps.util.PermissionHelper
 import timber.log.Timber
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -78,8 +86,14 @@ class MainActivity : AppCompatActivity() {
                 "$currentText\n$entry"
             }
             binding.txtDebugLogs.text = newText
-            binding.scrollDebugLogs.post {
-                binding.scrollDebugLogs.fullScroll(View.FOCUS_DOWN)
+
+            // Fix page autoscroll: Scroll directly inside child view WITHOUT requesting focus!
+            // When fullScroll(FOCUS_DOWN) was used, focus change triggered parent ScrollView to jump to bottom.
+            if (binding.cbAutoScrollLogs.isChecked) {
+                binding.scrollDebugLogs.post {
+                    val bottom = binding.txtDebugLogs.bottom
+                    binding.scrollDebugLogs.scrollTo(0, bottom)
+                }
             }
         }
 
@@ -136,6 +150,29 @@ class MainActivity : AppCompatActivity() {
 
         // Start foreground service if not already active
         startNavigationService()
+
+        // Handle Termux / CLI intent actions if launched via `am start`
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        when (intent?.getStringExtra("action")) {
+            "dump_json" -> dumpNotificationsAndShowDialog()
+            "rebind" -> {
+                PermissionHelper.rebindNotificationListener(this)
+                Toast.makeText(this, "Rebind requested from CLI", Toast.LENGTH_SHORT).show()
+            }
+            "scan" -> {
+                GoogleMapsNotificationListener.scanActiveNotifications()
+                Toast.makeText(this, "Scan tray requested from CLI", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     override fun onResume() {
@@ -221,6 +258,23 @@ class MainActivity : AppCompatActivity() {
         binding.btnScanTray.setOnClickListener {
             GoogleMapsNotificationListener.scanActiveNotifications()
             Toast.makeText(this, "Scanning active notification tray...", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnDumpJson.setOnClickListener {
+            dumpNotificationsAndShowDialog()
+        }
+
+        // Prevent outer ScrollView from intercepting touches when scrolling the log viewer
+        binding.scrollDebugLogs.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+            }
+            false
         }
 
         binding.cbLogAllNotifs.setOnCheckedChangeListener { _, isChecked ->
@@ -339,6 +393,65 @@ class MainActivity : AppCompatActivity() {
         updateHudPreview(testState)
         NavigationBroadcastService.sendTestPayload(this, testState)
         Toast.makeText(this, "Sent test $turnType maneuver to OLED", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun dumpNotificationsAndShowDialog() {
+        val json = GoogleMapsNotificationListener.dumpActiveNotificationsJson(this)
+
+        // 1. Copy to clipboard immediately
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Notifications JSON", json))
+
+        // 2. Save to Downloads directory
+        var savedPath = ""
+        try {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadDir.exists()) downloadDir.mkdirs()
+            val targetFile = File(downloadDir, "notifications_dump.json")
+            targetFile.writeText(json)
+            savedPath = targetFile.absolutePath
+        } catch (_: Exception) {
+            val fallbackFile = File(getExternalFilesDir(null), "notifications_dump.json")
+            fallbackFile.writeText(json)
+            savedPath = fallbackFile.absolutePath
+        }
+
+        DebugLogger.log("DUMP", "Exported notifications JSON to $savedPath", DebugLogger.Level.NAV)
+        Toast.makeText(this, "Copied JSON to clipboard & saved to $savedPath", Toast.LENGTH_LONG).show()
+
+        // 3. Show dialog for viewing and inspection
+        val msgView = TextView(this).apply {
+            text = json
+            setPadding(32, 24, 32, 24)
+            setTextIsSelectable(true)
+            typeface = Typeface.MONOSPACE
+            textSize = 10f
+            setTextColor(Color.parseColor("#80FFD4"))
+            setBackgroundColor(Color.parseColor("#0A0A0E"))
+        }
+
+        val scrollContainer = ScrollView(this).apply {
+            addView(msgView)
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 800)
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Active Notifications Dump (JSON)")
+            .setView(scrollContainer)
+            .setPositiveButton("Copy Again") { _, _ ->
+                clipboard.setPrimaryClip(ClipData.newPlainText("Notifications JSON", json))
+                Toast.makeText(this, "JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("Share") { _, _ ->
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, json)
+                    type = "text/plain"
+                }
+                startActivity(Intent.createChooser(sendIntent, "Share Notifications JSON"))
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun updateHudPreview(state: NavigationState) {

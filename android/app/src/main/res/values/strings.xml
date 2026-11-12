@@ -35,4 +35,7 @@
     <string name="btn_clear_logs">Clear Logs</string>
     <string name="btn_copy_logs">Copy Logs</string>
     <string name="cb_log_all_notifs">Log All System Notifications</string>
+    <string name="cb_auto_scroll_logs">Auto-scroll terminal</string>
+    <string name="btn_dump_json">Dump Notifications (JSON)</string>
+    <string name="btn_save_json">Save JSON to File</string>
 </resources>

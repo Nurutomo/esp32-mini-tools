@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/mainScrollView"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_dark"
@@ -600,40 +601,73 @@
                         app:strokeColor="@color/primary" />
                 </LinearLayout>
 
-                <!-- Checkbox for Log All Notifications -->
-                <com.google.android.material.checkbox.MaterialCheckBox
-                    android:id="@+id/cbLogAllNotifs"
-                    android:layout_width="wrap_content"
+                <!-- Action Bar 2: Dump Notifications JSON -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDumpJson"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/cb_log_all_notifs"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
+                    android:layout_marginBottom="8dp"
+                    android:text="@string/btn_dump_json"
+                    android:textColor="@color/oled_cyan"
+                    app:strokeColor="@color/oled_cyan" />
 
-                <!-- Scrollable Terminal Frame -->
+                <!-- Checkbox row: Log All Notifications & Auto-Scroll -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/cbLogAllNotifs"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/cb_log_all_notifs"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp" />
+
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/cbAutoScrollLogs"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:checked="true"
+                        android:text="@string/cb_auto_scroll_logs"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!-- Scrollable Terminal Frame (with focus isolation to prevent parent page scrolling) -->
                 <FrameLayout
+                    android:id="@+id/frameTerminal"
                     android:layout_width="match_parent"
                     android:layout_height="220dp"
                     android:layout_marginTop="6dp"
                     android:layout_marginBottom="10dp"
                     android:background="#0A0A0E"
+                    android:descendantFocusability="blocksDescendants"
                     android:padding="8dp">
 
-                    <androidx.core.widget.NestedScrollView
+                    <ScrollView
                         android:id="@+id/scrollDebugLogs"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
-                        android:fillViewport="true">
+                        android:fillViewport="true"
+                        android:nestedScrollingEnabled="false">
 
                         <TextView
                             android:id="@+id/txtDebugLogs"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:focusable="false"
+                            android:focusableInTouchMode="false"
                             android:fontFamily="monospace"
                             android:text="Waiting for events..."
                             android:textColor="#80FFD4"
                             android:textIsSelectable="true"
                             android:textSize="11sp" />
-                    </androidx.core.widget.NestedScrollView>
+                    </ScrollView>
 
                 </FrameLayout>
 
