@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.util.TimeZone
 import kotlin.math.roundToInt
 
 class NavigationBroadcastService : Service(), LocationListener, BluetoothController.Listener {
@@ -245,7 +246,8 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
             ),
             speed = currentGpsSpeed,
             preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
-            epochSeconds = System.currentTimeMillis() / 1000L
+            epochSeconds = System.currentTimeMillis() / 1000L,
+            tzOffsetSeconds = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
         )
         bluetoothController.send(Json.encodeToString(message))
     }
@@ -285,7 +287,8 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
             navigation = navPayload,
             speed = currentGpsSpeed,
             preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
-            epochSeconds = System.currentTimeMillis() / 1000L
+            epochSeconds = System.currentTimeMillis() / 1000L,
+            tzOffsetSeconds = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
         )
 
         val jsonString = Json.encodeToString(message)

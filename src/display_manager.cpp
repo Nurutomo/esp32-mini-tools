@@ -229,7 +229,7 @@ void renderNavHud(const NavigationData& nav) {
   if (nav.distance[0] != '\0') {
     const uint8_t distanceSize = 2;
     gDisplay.setTextSize(distanceSize);
-    gDisplay.setCursor(kTextX, 7);
+    gDisplay.setCursor(kTextX, 5);
     gDisplay.print(nav.distance);
   }
 

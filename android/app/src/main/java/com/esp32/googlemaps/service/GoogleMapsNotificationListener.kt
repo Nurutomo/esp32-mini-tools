@@ -425,7 +425,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 nextRoadSub = nextRoadSub.replace(Regex("\\p{Z}+"), " ").trim(),
                 distanceToTurn = distance.replace(Regex("\\p{Z}+"), "").trim(),
                 eta = eta,
-                ete = ete,
+                ete = shortenEte(ete),
                 totalDistance = totalDist.replace(Regex("\\p{Z}+"), "").trim(),
                 iconBase64 = iconBase64,
                 isNavigating = true,
@@ -438,6 +438,23 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
         private fun cleanEtaString(raw: String): String {
             return raw.replace(Regex("""(?i)\b(eta|tiba|llegada|ankunft|arrival)\b"""), "")
                 .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
+                .trim()
+        }
+
+        /**
+         * Shorten ETE duration to single-letter units for compact OLED display.
+         * "1 hr 43 min" → "1h 43m"
+         * "43 min"       → "43m"
+         * "2 hrs"        → "2h"
+         */
+        private fun shortenEte(raw: String): String {
+            return raw.trim()
+                .replace(Regex("""(?i)\s*hrs?\b"""), "h")
+                .replace(Regex("""(?i)\s*mins?\b"""), "m")
+                .replace(Regex("""(?i)\s*mnt\b"""), "m")
+                .replace(Regex("""(?i)\s*menit\b"""), "m")
+                .replace(Regex("""(?i)\s*jam\b"""), "h")  // Indonesian "jam" = hour
+                .replace(Regex("""  +"""), " ")
                 .trim()
         }
 

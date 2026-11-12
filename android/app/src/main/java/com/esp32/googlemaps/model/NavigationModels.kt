@@ -44,7 +44,11 @@ data class Esp32Message(
     val preferences: DevicePreferences? = null,
 
     @SerialName("ts")
-    val epochSeconds: Long? = null
+    val epochSeconds: Long? = null,
+
+    /** UTC offset in seconds for the phone's current timezone, e.g. +25200 for UTC+7. */
+    @SerialName("tz_offset")
+    val tzOffsetSeconds: Int? = null
 )
 
 @Serializable

@@ -8,16 +8,17 @@ NavigationData gNavData;
 
 // Clock state: epoch seconds from phone + millis() snapshot at sync time.
 // The ESP keeps its own time by adding elapsed millis since last sync.
-uint64_t gClockEpochSec = 0;   // Unix timestamp at last sync (seconds)
-uint32_t gClockSyncMs   = 0;   // millis() value when that sync arrived
-bool     gClockSynced   = false;
+uint64_t gClockEpochSec  = 0;   // Unix timestamp at last sync (seconds, UTC)
+uint32_t gClockSyncMs    = 0;   // millis() value when that sync arrived
+int32_t  gClockTzOffsetSec = 0; // UTC offset in seconds (e.g. +25200 for UTC+7)
+bool     gClockSynced    = false;
 
-// Return current Unix epoch seconds (best-effort, drifts without periodic resync).
-uint64_t currentEpochSec() {
+// Return current local epoch seconds (UTC + tz offset).
+uint64_t currentLocalEpochSec() {
   if (!gClockSynced) return 0;
   const uint32_t nowMs = millis();
-  const uint32_t elapsedMs = nowMs - gClockSyncMs;  // wraps after ~49 days, acceptable
-  return gClockEpochSec + (elapsedMs / 1000UL);
+  const uint32_t elapsedMs = nowMs - gClockSyncMs;
+  return gClockEpochSec + (elapsedMs / 1000UL) + static_cast<uint32_t>(gClockTzOffsetSec);
 }
 
 // Convert epoch seconds to broken-down time components (UTC only; no DST/timezone).
@@ -126,7 +127,7 @@ bool processNavigationJson(const char* payload, size_t len) {
     recognized = true;
   }
 
-  // 4. Phone clock sync — Unix epoch seconds (local time from phone)
+  // 4. Phone clock sync — Unix epoch seconds (UTC) + timezone offset
   if (doc["ts"].is<uint64_t>() || doc["ts"].is<long>()) {
     const uint64_t ts = doc["ts"].as<uint64_t>();
     if (ts > 1000000000ULL) {  // sanity: must be after year 2001
@@ -135,6 +136,9 @@ bool processNavigationJson(const char* payload, size_t len) {
       gClockSynced   = true;
       recognized = true;
     }
+  }
+  if (doc["tz_offset"].is<int>()) {
+    gClockTzOffsetSec = doc["tz_offset"].as<int>();
   }
 
   return recognized;
@@ -168,7 +172,7 @@ void getClockTimeStr(char* buf, size_t bufLen) {
     buf[bufLen - 1] = '\0';
     return;
   }
-  const ClockFields f = epochToFields(currentEpochSec());
+  const ClockFields f = epochToFields(currentLocalEpochSec());
   snprintf(buf, bufLen, "%02u:%02u", f.h, f.m);
 }
 
@@ -178,6 +182,6 @@ void getClockDateStr(char* buf, size_t bufLen) {
     buf[bufLen - 1] = '\0';
     return;
   }
-  const ClockFields f = epochToFields(currentEpochSec());
+  const ClockFields f = epochToFields(currentLocalEpochSec());
   snprintf(buf, bufLen, "%02u/%02u", f.d, f.mo);
 }
