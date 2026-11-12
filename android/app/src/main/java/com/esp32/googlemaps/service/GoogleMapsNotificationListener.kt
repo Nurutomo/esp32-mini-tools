@@ -423,10 +423,10 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             return NavigationState(
                 nextRoad = nextRoad,
                 nextRoadSub = nextRoadSub,
-                distanceToTurn = distance,
+                distanceToTurn = distance.replace(Regex("\\p{Z}+"), " ").trim(),
                 eta = eta,
                 ete = ete,
-                totalDistance = totalDist,
+                totalDistance = totalDist.replace(Regex("\\p{Z}+"), " ").trim(),
                 iconBase64 = iconBase64,
                 isNavigating = true,
                 lastUpdatedMs = System.currentTimeMillis()
