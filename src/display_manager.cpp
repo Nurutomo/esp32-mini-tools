@@ -227,9 +227,9 @@ void renderNavHud(const NavigationData& nav) {
 
   // Turn distance remains blank in cruise mode; never substitute route distance here.
   if (nav.distance[0] != '\0') {
-    const uint8_t distanceSize = strlen(nav.distance) <= 5 ? 3 : 2;
+    const uint8_t distanceSize = 2;
     gDisplay.setTextSize(distanceSize);
-    gDisplay.setCursor(kTextX, distanceSize == 2 ? 5 : 5);
+    gDisplay.setCursor(kTextX, 7);
     gDisplay.print(nav.distance);
   }
 
@@ -260,21 +260,37 @@ void renderNavHud(const NavigationData& nav) {
   renderRoadMarquee(road);
   gDisplay.setTextWrap(true);
 
-  // A restrained second line: maneuver cue, or concise ETA/ETE/remaining distance.
-  gDisplay.setCursor(2, 46);
+  // Lower section: two lines below the road name.
+  // Line 1 (y=47): maneuver sub-hint (e.g. "then turn right").
+  // Line 2 (y=57): compact trip summary — ETE, distance, ETA joined with " - ".
+  gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
+
   if (nav.nextRoadSub[0] != '\0') {
+    gDisplay.setCursor(2, 47);
     gDisplay.print(nav.nextRoadSub);
-  } else if (nav.ete[0] != '\0' && nav.totalDistance[0] != '\0') {
-    gDisplay.print(nav.ete);
-    gDisplay.print(" ");
-    gDisplay.print(nav.totalDistance);
-  } else if (nav.eta[0] != '\0') {
-    gDisplay.print("ETA ");
-    gDisplay.print(nav.eta);
-  } else if (nav.ete[0] != '\0') {
-    gDisplay.print(nav.ete);
-    gDisplay.print(" left");
   }
+
+  // Build a compact trip summary from whatever fields are populated.
+  char tripLine[32] = "";
+  size_t pos = 0;
+  if (nav.ete[0] != '\0') {
+    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, "%s", nav.ete);
+  }
+  if (nav.totalDistance[0] != '\0' && pos < sizeof(tripLine) - 1) {
+    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? " - %s" : "%s", nav.totalDistance);
+  }
+  if (nav.eta[0] != '\0' && pos < sizeof(tripLine) - 1) {
+    pos += snprintf(tripLine + pos, sizeof(tripLine) - pos, pos > 0 ? " - %s" : "%s", nav.eta);
+  }
+
+  if (tripLine[0] != '\0') {
+    // If nextRoadSub already occupies line 1, trip goes on line 2; otherwise use line 1.
+    const int16_t tripY = nav.nextRoadSub[0] != '\0' ? 57 : 47;
+    gDisplay.setCursor(2, tripY);
+    gDisplay.print(tripLine);
+  }
+  gDisplay.setTextWrap(true);
 
   gDisplay.display();
 
