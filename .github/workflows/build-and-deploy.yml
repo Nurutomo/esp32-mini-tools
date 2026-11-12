@@ -48,7 +48,9 @@ jobs:
 
       - name: Install PlatformIO
         if: steps.cache-pio.outputs.cache-hit != 'true'
-        run: python -m pip install --upgrade platformio
+        run: |
+          python -m pip install --upgrade platformio
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
   # =========================================================================
   # 1. Build ESP32 Firmwares (Parallel Matrix — restores PlatformIO from setup)
@@ -107,6 +109,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Install PlatformIO CLI
+        if: steps.check-firmware.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade platformio
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Build firmware for target
         if: steps.check-firmware.outputs.skip != 'true'
