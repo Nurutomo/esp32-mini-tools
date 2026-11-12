@@ -13,18 +13,12 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.text.Spanned
 import android.text.style.StyleSpan
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import android.widget.ImageView
-import android.widget.RemoteViews
-import android.widget.TextView
-import androidx.core.view.children
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.esp32.googlemaps.model.NavigationState
 import com.esp32.googlemaps.util.BitmapHelper
 import com.esp32.googlemaps.util.DebugLogger
 import com.esp32.googlemaps.util.NotificationDumpHelper
+import com.esp32.googlemaps.util.RemoteViewsExtractor
 import timber.log.Timber
 import java.util.Locale
 
@@ -91,22 +85,22 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             NavigationBroadcastService.updateNavigation(context.applicationContext, state)
         }
 
-        // Comprehensive distance regex supporting optional language prefixes ("In 500 m", "Dalam 200 m", "En 1 km")
-        private val DISTANCE_EXTRACTION_REGEX = Regex(
+        // Distance extraction regex supporting languages and optional prefixes ("In 500 m", "Dalam 200 m", "En 1 km")
+        val DISTANCE_EXTRACTION_REGEX = Regex(
             """(?:\b(?:in|dalam|en|nach|dans|tra|over|a|à|em|ke)\s+)?(\d+([.,]\d+)?\s*(?:m|km|ft|feet|mi|miles?|yd|yards?|meter|meters|kilometer|kilometers|mil|kaki))\b""",
             RegexOption.IGNORE_CASE
         )
 
-        private val CLOCK_TIME_REGEX = Regex(
+        val CLOCK_TIME_REGEX = Regex(
             """\b(\d{1,2}[:.]\d{2}\s*(?:AM|PM|am|pm)?|\d{1,2}\s*h\s*\d{2})\b"""
         )
 
-        private val DURATION_REGEX = Regex(
+        val DURATION_REGEX = Regex(
             """\b(\d+\s*(?:min|mins|mnt|menit|hr|hrs|jam|h|m))\b""",
             RegexOption.IGNORE_CASE
         )
 
-        private val TOTAL_DIST_REGEX = Regex(
+        val TOTAL_DIST_REGEX = Regex(
             """\b(\d+([.,]\d+)?\s*(?:km|mi|miles?))\b""",
             RegexOption.IGNORE_CASE
         )
@@ -121,34 +115,63 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
         }
 
         private fun parseNotificationStatic(sbn: StatusBarNotification, context: Context): NavigationState? {
-            // Standalone parser using context when listener instance is not yet bound
             return try {
                 val notification = sbn.notification ?: return null
-                val extras = notification.extras
                 val appCtx = try {
                     context.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
                 } catch (_: Exception) {
                     context
                 }
 
-                val titleStr = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
-                val textStr = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
-                val subTextStr = extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim() ?: ""
+                val rvData = RemoteViewsExtractor.extract(notification, context, appCtx)
+                val standardTexts = extractStandardExtrasTexts(notification)
+                val allCandidateTexts = (standardTexts + rvData.texts).filter { it.isNotBlank() }.distinct()
 
-                extractNavData(sbn, titleStr, textStr, subTextStr, "", null, appCtx)
+                extractNavData(sbn, allCandidateTexts, rvData.bitmaps, notification, context, appCtx)
             } catch (e: Exception) {
                 Timber.e("parseNotificationStatic error: ${e.message}")
                 null
             }
         }
 
-        private fun extractNavData(
+        fun extractStandardExtrasTexts(notification: Notification): List<String> {
+            val list = mutableListOf<String>()
+            val extras = notification.extras ?: return list
+
+            val titleSeq = extras.getCharSequence(Notification.EXTRA_TITLE)
+                ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG)
+                ?: extras.getCharSequence("android.title")
+            if (!titleSeq.isNullOrBlank()) list.add(titleSeq.toString().trim())
+
+            val textSeq = extras.getCharSequence(Notification.EXTRA_TEXT)
+                ?: extras.getCharSequence("android.text")
+            if (!textSeq.isNullOrBlank()) list.add(textSeq.toString().trim())
+
+            val bigTextSeq = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            if (!bigTextSeq.isNullOrBlank()) list.add(bigTextSeq.toString().trim())
+
+            val subSeq = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+                ?: extras.getCharSequence(Notification.EXTRA_INFO_TEXT)
+                ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)
+                ?: extras.getCharSequence("android.subText")
+            if (!subSeq.isNullOrBlank()) list.add(subSeq.toString().trim())
+
+            val lines = extras.getCharSequenceArray("android.textLines")
+            if (lines != null) {
+                for (line in lines) {
+                    if (!line.isNullOrBlank()) list.add(line.toString().trim())
+                }
+            }
+
+            return list
+        }
+
+        fun extractNavData(
             sbn: StatusBarNotification,
-            rawTitle: String,
-            rawText: String,
-            rawSubText: String,
-            rawBigText: String,
-            rawBitmap: Bitmap?,
+            candidateTexts: List<String>,
+            candidateBitmaps: List<Bitmap>,
+            notification: Notification,
+            context: Context,
             appSourceContext: Context
         ): NavigationState? {
             var distance = ""
@@ -158,118 +181,116 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             var ete = ""
             var totalDist = ""
 
-            // Combine fields to search for distance
-            val titleMatch = DISTANCE_EXTRACTION_REGEX.find(rawTitle)
-            val textMatch = DISTANCE_EXTRACTION_REGEX.find(rawText)
-            val bigTextMatch = if (rawBigText.isNotEmpty()) DISTANCE_EXTRACTION_REGEX.find(rawBigText) else null
+            val remainingTexts = mutableListOf<String>()
 
-            when {
-                titleMatch != null -> {
-                    distance = titleMatch.groupValues[1].trim()
-                    // If title had extra text after removing distance, use it
-                    val remainingTitle = rawTitle.replace(titleMatch.value, "").replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "").trim()
-                    if (remainingTitle.isNotEmpty()) {
-                        nextRoad = remainingTitle
-                        if (rawText.isNotEmpty()) nextRoadSub = rawText
-                    } else {
-                        nextRoad = rawText
+            // 1. Scan for distance in candidate texts
+            for (text in candidateTexts) {
+                val distMatch = DISTANCE_EXTRACTION_REGEX.find(text)
+                if (distMatch != null && distance.isEmpty()) {
+                    distance = distMatch.groupValues[1].trim()
+                    // Strip the distance substring
+                    val leftover = text.replace(distMatch.value, "")
+                        .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
+                        .trim()
+                    if (leftover.isNotEmpty() && leftover.length > 2) {
+                        remainingTexts.add(leftover)
                     }
-                }
-                textMatch != null -> {
-                    distance = textMatch.groupValues[1].trim()
-                    val remainingText = rawText.replace(textMatch.value, "").replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "").trim()
-                    nextRoad = if (remainingText.isNotEmpty()) remainingText else rawTitle
-                    if (rawTitle.isNotEmpty() && nextRoad != rawTitle) {
-                        nextRoadSub = rawTitle
-                    }
-                }
-                bigTextMatch != null -> {
-                    distance = bigTextMatch.groupValues[1].trim()
-                    val remainingBig = rawBigText.replace(bigTextMatch.value, "").replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "").trim()
-                    nextRoad = if (remainingBig.isNotEmpty()) remainingBig else rawTitle
-                    if (rawText.isNotEmpty()) nextRoadSub = rawText
-                }
-                else -> {
-                    // No distance found, treat as route / navigation status
-                    if (rawTitle.isNotEmpty() && rawText.isNotEmpty()) {
-                        nextRoad = rawTitle
-                        nextRoadSub = rawText
-                    } else if (rawTitle.isNotEmpty()) {
-                        nextRoad = rawTitle
-                    } else if (rawText.isNotEmpty()) {
-                        nextRoad = rawText
-                    }
+                } else {
+                    remainingTexts.add(text)
                 }
             }
 
-            // Parse ETA / ETE / Remaining total distance from subText or text
-            val candidateEtaSources = listOf(rawSubText, rawText, rawBigText).filter { it.isNotEmpty() }
-            for (source in candidateEtaSources) {
+            // 2. Scan for ETA, ETE, and Total Remaining Distance
+            for (text in candidateTexts) {
+                // Check for clock time (ETA)
                 if (eta.isEmpty()) {
-                    val timeMatch = CLOCK_TIME_REGEX.find(source)
-                    if (timeMatch != null) eta = cleanEtaString(timeMatch.value)
+                    val timeMatch = CLOCK_TIME_REGEX.find(text)
+                    if (timeMatch != null) {
+                        eta = cleanEtaString(timeMatch.value)
+                    }
                 }
+
+                // Check for duration (ETE)
                 if (ete.isEmpty()) {
-                    val durMatch = DURATION_REGEX.find(source)
-                    if (durMatch != null) ete = durMatch.value.trim()
+                    val durMatch = DURATION_REGEX.find(text)
+                    if (durMatch != null) {
+                        ete = durMatch.value.trim()
+                    }
                 }
+
+                // Check for total distance
                 if (totalDist.isEmpty()) {
-                    val distMatch = TOTAL_DIST_REGEX.find(source)
-                    if (distMatch != null && distMatch.value.trim() != distance) {
-                        totalDist = distMatch.value.trim()
+                    val tdMatch = TOTAL_DIST_REGEX.find(text)
+                    if (tdMatch != null && tdMatch.value.trim() != distance) {
+                        totalDist = tdMatch.value.trim()
+                    }
+                }
+
+                // Handle bullet-separated trip metrics (e.g. "15 min · 4.5 km · 17:30")
+                if (text.contains("·") || text.contains("•") || text.contains("|")) {
+                    val parts = text.split(Regex("""[·•|\-]""")).map { it.trim() }.filter { it.isNotEmpty() }
+                    for (part in parts) {
+                        if (ete.isEmpty() && DURATION_REGEX.containsMatchIn(part)) {
+                            ete = part
+                        } else if (eta.isEmpty() && CLOCK_TIME_REGEX.containsMatchIn(part)) {
+                            eta = cleanEtaString(part)
+                        } else if (totalDist.isEmpty() && TOTAL_DIST_REGEX.containsMatchIn(part) && part != distance) {
+                            totalDist = part
+                        }
                     }
                 }
             }
 
-            // Subtext bullet splitter fallback (e.g. "15 min · 4.2 km · 17:30")
-            if (rawSubText.isNotEmpty() && (eta.isEmpty() || ete.isEmpty())) {
-                val parts = rawSubText.split(Regex("""[·•|\-]""")).map { it.trim() }.filter { it.isNotEmpty() }
-                when (parts.size) {
-                    3 -> {
-                        if (ete.isEmpty()) ete = parts[0]
-                        if (totalDist.isEmpty()) totalDist = parts[1]
-                        if (eta.isEmpty()) eta = cleanEtaString(parts[2])
-                    }
-                    2 -> {
-                        if (ete.isEmpty()) ete = parts[0]
-                        if (eta.isEmpty()) eta = cleanEtaString(parts[1])
-                    }
-                    1 -> {
-                        if (eta.isEmpty()) eta = cleanEtaString(parts[0])
-                    }
+            // 3. Extract Road and Sub-Road from remaining texts
+            val roadCandidates = remainingTexts.filter { text ->
+                val isOnlyTime = CLOCK_TIME_REGEX.matches(text)
+                val isOnlyDur = DURATION_REGEX.matches(text)
+                val isOnlyDist = DISTANCE_EXTRACTION_REGEX.matches(text) || TOTAL_DIST_REGEX.matches(text)
+                val isEtaString = text.startsWith("ETA", ignoreCase = true) || text.startsWith("Tiba", ignoreCase = true)
+                !isOnlyTime && !isOnlyDur && !isOnlyDist && !isEtaString && text != distance
+            }
+
+            if (roadCandidates.isNotEmpty()) {
+                nextRoad = roadCandidates[0]
+                if (roadCandidates.size > 1) {
+                    nextRoadSub = roadCandidates[1]
                 }
             }
 
-            // Fallback for ongoing navigation notifications without clear distance
-            if (nextRoad.isEmpty() && distance.isEmpty()) {
-                if (sbn.isOngoing || sbn.id == 1) {
-                    nextRoad = if (rawTitle.isNotEmpty()) rawTitle else "Navigating route"
+            // 4. Fallback for ongoing navigation notification without explicit road text
+            if (nextRoad.isEmpty()) {
+                if (distance.isNotEmpty()) {
+                    nextRoad = "Navigating route"
+                } else if (sbn.isOngoing || sbn.id == 1) {
+                    nextRoad = "Navigating route"
                 } else {
                     return null
                 }
             }
 
-            // Maneuver icon fallback: if no bitmap from notification, synthesize arrow from text
-            var finalBitmap = rawBitmap
+            // 5. Maneuver Icon Resolution
+            var finalBitmap: Bitmap? = extractIcon(notification, context, appSourceContext)
+            if (finalBitmap == null && candidateBitmaps.isNotEmpty()) {
+                finalBitmap = candidateBitmaps.first()
+            }
+
+            // If still null, synthesize arrow based on keywords in all candidate texts
             if (finalBitmap == null) {
-                val combinedText = "$rawTitle $rawText $rawBigText".lowercase(Locale.ROOT)
+                val combinedText = candidateTexts.joinToString(" ").lowercase(Locale.ROOT)
                 finalBitmap = when {
-                    combinedText.contains("roundabout") || combinedText.contains("bundaran") || combinedText.contains("rond-point") || combinedText.contains("circle") -> {
+                    combinedText.contains("roundabout") || combinedText.contains("bundaran") || combinedText.contains("circle") -> {
                         BitmapHelper.createRoundaboutBitmap()
                     }
-                    combinedText.contains("left") || combinedText.contains("kiri") || combinedText.contains("gauche") || combinedText.contains("links") || combinedText.contains("izquierda") -> {
+                    combinedText.contains("left") || combinedText.contains("kiri") || combinedText.contains("gauche") || combinedText.contains("links") -> {
                         BitmapHelper.createTurnLeftBitmap()
                     }
-                    combinedText.contains("right") || combinedText.contains("kanan") || combinedText.contains("droite") || combinedText.contains("rechts") || combinedText.contains("derecha") -> {
+                    combinedText.contains("right") || combinedText.contains("kanan") || combinedText.contains("droite") || combinedText.contains("rechts") -> {
                         BitmapHelper.createTurnRightBitmap()
                     }
-                    combinedText.contains("straight") || combinedText.contains("lurus") || combinedText.contains("terus") || combinedText.contains("ahead") || combinedText.contains("tout droit") -> {
+                    combinedText.contains("straight") || combinedText.contains("lurus") || combinedText.contains("terus") || combinedText.contains("ahead") -> {
                         BitmapHelper.createStraightBitmap()
                     }
-                    combinedText.contains("u-turn") || combinedText.contains("putar balik") -> {
-                        BitmapHelper.createTurnLeftBitmap()
-                    }
-                    else -> null
+                    else -> BitmapHelper.createStraightBitmap()
                 }
             }
 
@@ -294,6 +315,62 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             return raw.replace(Regex("""(?i)\b(eta|tiba|llegada|ankunft)\b"""), "")
                 .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
                 .trim()
+        }
+
+        fun extractIcon(notification: Notification, context: Context, appSourceContext: Context): Bitmap? {
+            val largeIcon = notification.getLargeIcon()
+            if (largeIcon != null) {
+                try {
+                    val drawable = largeIcon.loadDrawable(context) ?: largeIcon.loadDrawable(appSourceContext)
+                    if (drawable != null) {
+                        val bmp = drawableToBitmap(drawable)
+                        if (bmp != null) return bmp
+                    }
+                } catch (_: Exception) {}
+            }
+
+            @Suppress("DEPRECATION")
+            if (notification.largeIcon != null) {
+                return notification.largeIcon
+            }
+
+            val extras = notification.extras
+            if (extras != null) {
+                val bmpExtra = extras.getParcelable<Bitmap>(Notification.EXTRA_LARGE_ICON)
+                    ?: extras.getParcelable<Bitmap>("android.largeIcon.big")
+                    ?: extras.getParcelable<Bitmap>("android.picture")
+                if (bmpExtra != null) return bmpExtra
+            }
+
+            val smallIcon = notification.getSmallIcon()
+            if (smallIcon != null) {
+                try {
+                    val drawable = smallIcon.loadDrawable(context) ?: smallIcon.loadDrawable(appSourceContext)
+                    if (drawable != null) {
+                        val bmp = drawableToBitmap(drawable)
+                        if (bmp != null) return bmp
+                    }
+                } catch (_: Exception) {}
+            }
+
+            return null
+        }
+
+        private fun drawableToBitmap(drawable: Drawable): Bitmap? {
+            if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                return drawable.bitmap
+            }
+            return try {
+                val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 64
+                val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 64
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(bitmap)
+                drawable.setBounds(0, 0, canvas.width, canvas.height)
+                drawable.draw(canvas)
+                bitmap
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
@@ -324,7 +401,7 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             for (sbn in notifications) {
                 if (isNavigationNotification(sbn)) {
                     foundNav = true
-                    DebugLogger.log("LISTENER", "Found active navigation notif (pkg=${sbn.packageName}, id=${sbn.id}, ongoing=${sbn.isOngoing})", DebugLogger.Level.NAV)
+                    DebugLogger.log("LISTENER", "Found navigation notification (pkg=${sbn.packageName}, id=${sbn.id}, ongoing=${sbn.isOngoing})", DebugLogger.Level.NAV)
                     handleMapsNotification(sbn)
                 }
             }
@@ -358,30 +435,19 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
     }
 
     private fun handleMapsNotification(sbn: StatusBarNotification) {
-        val extras = sbn.notification?.extras
-        val rawTitle = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
-        val rawText = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
-        val rawSubText = extras?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim() ?: ""
-
-        DebugLogger.log(
-            "MAPS_RX",
-            "Maps notif (pkg=${sbn.packageName}, id=${sbn.id}, ongoing=${sbn.isOngoing}): title='$rawTitle' text='$rawText' sub='$rawSubText'",
-            DebugLogger.Level.NAV
-        )
-
         try {
             val navState = parseNotificationInternal(sbn)
             if (navState != null) {
                 DebugLogger.log(
                     "MAPS_PARSED",
-                    "Parsed OK -> Dist='${navState.distanceToTurn}' | Road='${navState.nextRoad}' | Sub='${navState.nextRoadSub}' | ETA='${navState.eta}' | Icon=${navState.currentIconBitmap != null}",
+                    "Parsed -> Dist='${navState.distanceToTurn}' | Road='${navState.nextRoad}' | Sub='${navState.nextRoadSub}' | ETA='${navState.eta}'",
                     DebugLogger.Level.NAV
                 )
                 broadcastNavigationState(applicationContext, navState)
             } else {
                 DebugLogger.log(
                     "MAPS_SKIP",
-                    "Skipped: Notification lacks navigation content (title='$rawTitle', text='$rawText')",
+                    "Skipped: Notification lacks navigation content (pkg=${sbn.packageName}, id=${sbn.id})",
                     DebugLogger.Level.DEBUG
                 )
             }
@@ -393,204 +459,26 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
 
     private fun parseNotificationInternal(sbn: StatusBarNotification): NavigationState? {
         val notification = sbn.notification ?: return null
-        val extras = notification.extras
         val appSourceContext = try {
             createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
         } catch (_: Exception) {
             applicationContext
         }
 
-        // 1. Extract Maneuver Icon
-        var rawBitmap: Bitmap? = extractIcon(notification, appSourceContext)
+        // 1. Extract from standard notification extras
+        val standardTexts = extractStandardExtrasTexts(notification)
 
-        // 2. Extract standard and extended notification extras
-        var titleStr = ""
-        var textStr = ""
-        var subTextStr = ""
-        var bigTextStr = ""
+        // 2. Extract from RemoteViews (Reflection on mActions + View hierarchy traversal)
+        val rvData = RemoteViewsExtractor.extract(notification, this, appSourceContext)
 
-        if (extras != null) {
-            val titleSeq = extras.getCharSequence(Notification.EXTRA_TITLE)
-                ?: extras.getCharSequence(Notification.EXTRA_TITLE_BIG)
-                ?: extras.getCharSequence("android.title")
-            titleStr = titleSeq?.toString()?.trim() ?: ""
+        val candidateTexts = (standardTexts + rvData.texts).filter { it.isNotBlank() }.distinct()
 
-            val textSeq = extras.getCharSequence(Notification.EXTRA_TEXT)
-                ?: extras.getCharSequence("android.text")
+        DebugLogger.log(
+            "MAPS_EXTRACT",
+            "Extracted ${candidateTexts.size} texts: $candidateTexts",
+            DebugLogger.Level.DEBUG
+        )
 
-            if (textSeq is Spanned) {
-                val parsed = parseSpannedText(textSeq)
-                textStr = if (parsed.second.isNotEmpty()) "${parsed.first} ${parsed.second}".trim() else parsed.first
-            } else if (textSeq != null) {
-                textStr = textSeq.toString().trim()
-            }
-
-            val bigTextSeq = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
-            if (bigTextSeq != null) {
-                bigTextStr = bigTextSeq.toString().trim()
-            }
-
-            // Fallback to textLines if text is empty
-            if (textStr.isEmpty()) {
-                val lines = extras.getCharSequenceArray("android.textLines")
-                if (lines != null && lines.isNotEmpty()) {
-                    textStr = lines.joinToString(" - ") { it.toString().trim() }
-                }
-            }
-
-            val subSeq = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
-                ?: extras.getCharSequence(Notification.EXTRA_INFO_TEXT)
-                ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)
-                ?: extras.getCharSequence("android.subText")
-            subTextStr = subSeq?.toString()?.trim() ?: ""
-        }
-
-        // 3. Fallback: Deep RemoteViews inspection if standard fields are incomplete
-        if (titleStr.isEmpty() || textStr.isEmpty() || rawBitmap == null) {
-            try {
-                val remoteViews = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    try {
-                        Notification.Builder.recoverBuilder(this, notification).createBigContentView()
-                            ?: Notification.Builder.recoverBuilder(this, notification).createContentView()
-                    } catch (_: Exception) {
-                        @Suppress("DEPRECATION")
-                        notification.bigContentView ?: notification.contentView
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    notification.bigContentView ?: notification.contentView
-                }
-
-                if (remoteViews != null) {
-                    val layoutInflater = appSourceContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE) as LayoutInflater
-                    val viewGroup = layoutInflater.inflate(remoteViews.layoutId, null) as? ViewGroup
-                    if (viewGroup != null) {
-                        remoteViews.reapply(appSourceContext, viewGroup)
-
-                        val directionView = findChildByEntryName(viewGroup, appSourceContext, "text") as? TextView
-                        val titleView = findChildByEntryName(viewGroup, appSourceContext, "title") as? TextView
-                        val headerView = findChildByEntryName(viewGroup, appSourceContext, "header_text") as? TextView
-                        val rightIconView = findChildByEntryName(viewGroup, appSourceContext, "right_icon") as? ImageView
-
-                        if (textStr.isEmpty() && directionView != null && !directionView.text.isNullOrEmpty()) {
-                            textStr = directionView.text.toString().trim()
-                        }
-                        if (titleStr.isEmpty() && titleView != null && !titleView.text.isNullOrEmpty()) {
-                            titleStr = titleView.text.toString().trim()
-                        }
-                        if (subTextStr.isEmpty() && headerView != null && !headerView.text.isNullOrEmpty()) {
-                            subTextStr = headerView.text.toString().trim()
-                        }
-                        if (rawBitmap == null && rightIconView?.drawable != null) {
-                            rawBitmap = drawableToBitmap(rightIconView.drawable)
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                DebugLogger.log("MAPS_REMOTE", "RemoteViews fallback note: ${e.message}", DebugLogger.Level.DEBUG)
-            }
-        }
-
-        return extractNavData(sbn, titleStr, textStr, subTextStr, bigTextStr, rawBitmap, appSourceContext)
-    }
-
-    private fun extractIcon(notification: Notification, appSourceContext: Context): Bitmap? {
-        // 1. Try getLargeIcon() with fallback between local and source context
-        val largeIcon = notification.getLargeIcon()
-        if (largeIcon != null) {
-            try {
-                val drawable = largeIcon.loadDrawable(this) ?: largeIcon.loadDrawable(appSourceContext)
-                if (drawable != null) {
-                    val bmp = drawableToBitmap(drawable)
-                    if (bmp != null) return bmp
-                }
-            } catch (_: Exception) {}
-        }
-
-        // 2. Try legacy notification.largeIcon
-        @Suppress("DEPRECATION")
-        if (notification.largeIcon != null) {
-            return notification.largeIcon
-        }
-
-        // 3. Try Bitmap in extras
-        val extras = notification.extras
-        if (extras != null) {
-            val bmpExtra = extras.getParcelable<Bitmap>(Notification.EXTRA_LARGE_ICON)
-                ?: extras.getParcelable<Bitmap>("android.largeIcon.big")
-                ?: extras.getParcelable<Bitmap>("android.picture")
-            if (bmpExtra != null) return bmpExtra
-        }
-
-        // 4. Try getSmallIcon()
-        val smallIcon = notification.getSmallIcon()
-        if (smallIcon != null) {
-            try {
-                val drawable = smallIcon.loadDrawable(this) ?: smallIcon.loadDrawable(appSourceContext)
-                if (drawable != null) {
-                    val bmp = drawableToBitmap(drawable)
-                    if (bmp != null) return bmp
-                }
-            } catch (_: Exception) {}
-        }
-
-        return null
-    }
-
-    private fun drawableToBitmap(drawable: Drawable): Bitmap? {
-        if (drawable is BitmapDrawable && drawable.bitmap != null) {
-            return drawable.bitmap
-        }
-        return try {
-            val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 64
-            val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 64
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            drawable.setBounds(0, 0, canvas.width, canvas.height)
-            drawable.draw(canvas)
-            bitmap
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun parseSpannedText(spanned: Spanned): Pair<String, String> {
-        val spans = spanned.getSpans(0, spanned.length, StyleSpan::class.java)
-        var road = ""
-        var sub = ""
-
-        if (spans.isNotEmpty()) {
-            for (span in spans) {
-                val start = spanned.getSpanStart(span)
-                val end = spanned.getSpanEnd(span)
-                val segment = spanned.substring(start, end).trim()
-                if (span.style == Typeface.BOLD) {
-                    road = if (road.isEmpty()) segment else "$road $segment"
-                } else {
-                    sub = if (sub.isEmpty()) segment else "$sub $segment"
-                }
-            }
-        }
-
-        if (road.isEmpty()) {
-            road = spanned.toString().trim()
-        }
-
-        return Pair(road, sub)
-    }
-
-    private fun findChildByEntryName(group: ViewGroup, appCtx: Context, entryName: String): View? {
-        for (child in group.children) {
-            val name = try {
-                if (child.id > 0) appCtx.resources.getResourceEntryName(child.id) else ""
-            } catch (_: Exception) { "" }
-
-            if (name == entryName) return child
-            if (child is ViewGroup) {
-                val found = findChildByEntryName(child, appCtx, entryName)
-                if (found != null) return found
-            }
-        }
-        return null
+        return extractNavData(sbn, candidateTexts, rvData.bitmaps, notification, this, appSourceContext)
     }
 }

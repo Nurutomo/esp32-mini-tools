@@ -15,31 +15,117 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # =========================================================================
+  # 1. Build ESP32 Firmwares (Runs in Parallel, Caches & Skips if Unchanged)
+  # =========================================================================
+  build-firmware:
+    name: Build ESP32 Firmware
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Build ESP32 PlatformIO Firmwares
+      # Cache PlatformIO build artifacts & toolchains based on firmware sources
+      - name: Cache PlatformIO builds & toolchains
+        id: pio-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .pio/build
+            ~/.platformio
+          key: pio-firmware-${{ runner.os }}-${{ hashFiles('platformio.ini', 'src/**', 'include/**', 'lib/**') }}
+          restore-keys: |
+            pio-firmware-${{ runner.os }}-
+
+      - name: Check cached firmware binaries
+        id: check-firmware
+        shell: bash
+        run: |
+          if [ -f .pio/build/esp32-c3-supermini/firmware.bin ] && \
+             [ -f .pio/build/esp32-devkit/firmware.bin ] && \
+             [ -f .pio/build/esp32-devkit-classic-bt/firmware.bin ] && \
+             [ -f .pio/build/esp32-s3-devkit/firmware.bin ]; then
+            echo "All 4 ESP32 target binaries found in cache. Skipping compilation!"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Firmware binaries missing or source modified. Running full build."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python for PlatformIO
+        if: steps.check-firmware.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install PlatformIO
+        if: steps.check-firmware.outputs.skip != 'true'
         run: python -m pip install --upgrade platformio
 
       - name: Build firmware for all targets
+        if: steps.check-firmware.outputs.skip != 'true'
         run: >-
-          pio run
+          pio run -j 4
           -e esp32-c3-supermini
           -e esp32-devkit
           -e esp32-devkit-classic-bt
           -e esp32-s3-devkit
 
-      # 2. Build Android Companion App (APK)
+      - name: Prepare firmware artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-firmware
+          for env in esp32-c3-supermini esp32-devkit esp32-devkit-classic-bt esp32-s3-devkit; do
+            mkdir -p "dist-firmware/$env"
+            cp ".pio/build/$env/bootloader.bin" "dist-firmware/$env/"
+            cp ".pio/build/$env/partitions.bin" "dist-firmware/$env/"
+            cp ".pio/build/$env/firmware.bin" "dist-firmware/$env/"
+          done
+
+      - name: Upload firmware binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware
+          path: dist-firmware
+          retention-days: 7
+
+  # =========================================================================
+  # 2. Build Android App (Runs in Parallel, Caches & Skips if Unchanged)
+  # =========================================================================
+  build-android:
+    name: Build Android Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Cache Release APK and Gradle dependencies based on android/ sources
+      - name: Cache Android Release APK & Gradle
+        id: android-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-apk-${{ runner.os }}-${{ hashFiles('android/**') }}
+          restore-keys: |
+            android-apk-${{ runner.os }}-
+
+      - name: Check cached APK
+        id: check-apk
+        shell: bash
+        run: |
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            echo "Release APK found in cache. Skipping Gradle build!"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release APK missing or Android source modified. Building APK."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up JDK 17
+        if: steps.check-apk.outputs.skip != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -47,15 +133,49 @@ jobs:
           cache: 'gradle'
 
       - name: Grant execute permission for gradlew
+        if: steps.check-apk.outputs.skip != 'true'
         run: chmod +x android/gradlew
 
       - name: Build Android Release APK
+        if: steps.check-apk.outputs.skip != 'true'
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
 
-      # 3. Prepare Web Flasher, Manifests & APK for GitHub Pages
-      - name: Prepare web flasher and publish APK
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-google-maps-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 7
+
+  # =========================================================================
+  # 3. Aggregate Artifacts & Deploy to GitHub Pages
+  # =========================================================================
+  deploy:
+    name: Package & Deploy GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [build-firmware, build-android]
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-firmware
+          path: downloaded-firmware
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32-google-maps-apk
+          path: downloaded-apk
+
+      - name: Assemble GitHub Pages site distribution
         shell: bash
         env:
           BUILD_COMMIT: ${{ github.sha }}
@@ -63,27 +183,24 @@ jobs:
           set -euo pipefail
           site_dir="dist"
           mkdir -p "$site_dir/firmware" "$site_dir/apk"
+
+          # 1. Copy web flasher UI
           cp web/index.html "$site_dir/index.html"
           build_date=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           printf '{"commit":"%s","builtAt":"%s"}\n' "${BUILD_COMMIT:0:7}" "$build_date" > "$site_dir/commit.json"
 
-          # Publish built APK to website
-          apk_src="android/app/build/outputs/apk/release/app-release.apk"
-          if [ -f "$apk_src" ]; then
-            cp "$apk_src" "$site_dir/apk/esp32-google-maps.apk"
-            echo "Successfully copied APK to $site_dir/apk/esp32-google-maps.apk"
-          else
-            echo "ERROR: APK not found at $apk_src" >&2
-            exit 1
-          fi
+          # 2. Copy Android APK
+          cp downloaded-apk/app-release.apk "$site_dir/apk/esp32-google-maps.apk"
+          echo "Successfully placed APK at $site_dir/apk/esp32-google-maps.apk"
 
+          # 3. Copy firmware binaries and generate manifests
           write_manifest() {
             local env_name="$1" device_name="$2" chip_family="$3"
-            local build_dir=".pio/build/$1" out_dir="dist/firmware/$1"
+            local src_dir="downloaded-firmware/$1" out_dir="$site_dir/firmware/$1"
             mkdir -p "$out_dir"
-            cp "$build_dir/bootloader.bin" "$out_dir/bootloader.bin"
-            cp "$build_dir/partitions.bin" "$out_dir/partitions.bin"
-            cp "$build_dir/firmware.bin" "$out_dir/firmware.bin"
+            cp "$src_dir/bootloader.bin" "$out_dir/bootloader.bin"
+            cp "$src_dir/partitions.bin" "$out_dir/partitions.bin"
+            cp "$src_dir/firmware.bin" "$out_dir/firmware.bin"
             cat > "$out_dir/manifest.json" <<EOF
           {
             "name": "$device_name",
@@ -100,17 +217,11 @@ jobs:
           }
           EOF
           }
+
           write_manifest esp32-c3-supermini "ESP32-C3 SuperMini OLED BLE (GPIO 8/9)" ESP32-C3
           write_manifest esp32-devkit "Classic ESP32 OLED BLE (GPIO 21/22)" ESP32
           write_manifest esp32-devkit-classic-bt "Classic ESP32 OLED Bluetooth Classic (GPIO 21/22)" ESP32
           write_manifest esp32-s3-devkit "ESP32-S3 OLED BLE (GPIO 8/9)" ESP32-S3
-
-      # 4. Upload APK as workflow artifact
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-google-maps-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -120,13 +231,6 @@ jobs:
         with:
           path: dist
 
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

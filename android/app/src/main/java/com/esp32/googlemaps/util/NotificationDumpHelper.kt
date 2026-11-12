@@ -98,6 +98,24 @@ object NotificationDumpHelper {
         }
         obj.put("actions", actionsArray)
 
+        // RemoteViews extraction inspection
+        val appSourceContext = try {
+            context.createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+        } catch (_: Exception) {
+            context
+        }
+        val rvData = RemoteViewsExtractor.extract(n, context, appSourceContext)
+        val rvObj = JSONObject()
+        val rvTextsArray = JSONArray()
+        rvData.texts.forEach { rvTextsArray.put(it) }
+        rvObj.put("extractedTexts", rvTextsArray)
+        rvObj.put("extractedBitmapsCount", rvData.bitmaps.size)
+
+        val debugActionsArray = JSONArray()
+        rvData.actionsDebug.forEach { debugActionsArray.put(it) }
+        rvObj.put("actionsDebug", debugActionsArray)
+        obj.put("remoteViews", rvObj)
+
         // Navigation parse analysis
         if (isNavApp) {
             val navAnalysis = JSONObject()
