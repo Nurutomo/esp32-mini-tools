@@ -160,6 +160,23 @@ bool initDisplay(uint8_t sdaPin, uint8_t sclPin) {
 }
 
 bool isDisplayReady() {
+  static uint32_t lastProbeMs = 0;
+  constexpr uint32_t kHotplugProbeIntervalMs = 1000;
+  const uint32_t now = millis();
+  if (now - lastProbeMs < kHotplugProbeIntervalMs) return gDisplayReady;
+  lastProbeMs = now;
+
+  if (gDisplayReady) {
+    Wire.beginTransmission(gDisplayAddress);
+    if (Wire.endTransmission() != 0) {
+      gDisplayReady = false;
+      gDisplayAddress = 0;
+    }
+  }
+
+  if (!gDisplayReady) {
+    gDisplayReady = initDisplay(OLED_SDA_PIN, OLED_SCL_PIN);
+  }
   return gDisplayReady;
 }
 
