@@ -118,79 +118,85 @@ void renderNavHud(const NavigationData& nav) {
   if (!gDisplayReady) return;
   prepareForI2C();
 
+  // A compact 128x64 layout: icon, maneuver distance and speed in the top row;
+  // road name and trip summary get the full width below the divider.
+  constexpr int16_t kIconX = 2;
+  constexpr int16_t kIconY = 2;
+  constexpr int16_t kTextX = 36;
+  constexpr int16_t kSpeedRight = 126;
+
   gDisplay.clearDisplay();
   gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
 
-  // 1. Maneuver Icon (32x32 at top-left 0, 0)
+  // Maneuver icon, centered in a 32x32 area. Bitmap is already converted by the phone.
   if (nav.hasIcon) {
-    gDisplay.drawBitmap(0, 0, nav.iconBitmap, 32, 32, SSD1306_WHITE);
+    gDisplay.drawBitmap(kIconX, kIconY, nav.iconBitmap, 32, 32, SSD1306_WHITE);
   } else {
-    // Elegant fallback turn marker
-    gDisplay.drawRoundRect(2, 2, 28, 28, 4, SSD1306_WHITE);
-    gDisplay.drawLine(16, 6, 16, 26, SSD1306_WHITE);
-    gDisplay.drawLine(16, 6, 10, 13, SSD1306_WHITE);
-    gDisplay.drawLine(16, 6, 22, 13, SSD1306_WHITE);
+    gDisplay.drawRoundRect(kIconX, kIconY, 28, 28, 4, SSD1306_WHITE);
+    gDisplay.drawLine(16, 25, 16, 12, SSD1306_WHITE);
+    gDisplay.fillTriangle(16, 5, 9, 14, 23, 14, SSD1306_WHITE);
   }
 
-  // Vertical separator next to maneuver icon
-  gDisplay.drawLine(33, 0, 33, 31, SSD1306_WHITE);
+  // Icon separator.
+  gDisplay.drawFastVLine(34, 2, 28, SSD1306_WHITE);
 
-  // 2. Distance to turn (Bold TextSize 2 if short, Size 1 if long)
-  if (strlen(nav.distance) > 0) {
-    if (strlen(nav.distance) <= 6) {
-      gDisplay.setTextSize(2);
-      gDisplay.setCursor(37, 1);
-      gDisplay.print(nav.distance);
-    } else {
-      gDisplay.setTextSize(1);
-      gDisplay.setCursor(37, 4);
-      gDisplay.print(nav.distance);
-    }
+  // Turn distance remains blank in cruise mode; never substitute route distance here.
+  if (nav.distance[0] != '\0') {
+    const uint8_t distanceSize = strlen(nav.distance) <= 5 ? 2 : 1;
+    gDisplay.setTextSize(distanceSize);
+    gDisplay.setCursor(kTextX, distanceSize == 2 ? 5 : 10);
+    gDisplay.print(nav.distance);
   }
 
-  // 3. Trip info (ETA / ETE / Remaining Distance)
+  // Speed badge is right aligned and gets reserved space so it cannot overlap distance.
   gDisplay.setTextSize(1);
-  gDisplay.setCursor(37, 20);
-  if (strlen(nav.ete) > 0 && strlen(nav.totalDistance) > 0) {
-    gDisplay.printf("%s (%s)", nav.ete, nav.totalDistance);
-  } else if (strlen(nav.eta) > 0) {
-    gDisplay.printf("ETA %s", nav.eta);
-  } else if (strlen(nav.ete) > 0) {
-    gDisplay.printf("%s rem", nav.ete);
-  }
-
-  // 4. Real-time GPS Speedometer in top right corner
   if (nav.speed >= 0) {
-    gDisplay.setTextSize(1);
-    gDisplay.setCursor(102, 1);
-    gDisplay.printf("%3d", nav.speed);
-    gDisplay.setCursor(102, 11);
+    char speedText[8];
+    snprintf(speedText, sizeof(speedText), "%d", nav.speed);
+    const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 6 + 8);
+    const int16_t speedX = kSpeedRight - speedWidth;
+    gDisplay.drawRoundRect(speedX, 2, speedWidth, 26, 3, SSD1306_WHITE);
+    gDisplay.setCursor(speedX + 4, 5);
+    gDisplay.print(speedText);
+    gDisplay.setCursor(speedX + 4, 17);
     gDisplay.print("km/h");
-
-    // Overspeed warning indicator
     if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
-      gDisplay.drawRect(100, 0, 27, 21, SSD1306_WHITE);
+      gDisplay.drawRect(speedX - 1, 1, speedWidth + 2, 28, SSD1306_WHITE);
     }
   }
 
-  // Horizontal separator between top HUD and bottom street info
-  gDisplay.drawLine(0, 32, 127, 32, SSD1306_WHITE);
+  // Split the maneuver area from the road/trip details.
+  gDisplay.drawFastHLine(0, 33, OLED_WIDTH, SSD1306_WHITE);
 
-  // 5. Main street / highway name
+  // Road name: fit the single line to the screen rather than drawing off-screen.
   gDisplay.setTextSize(1);
-  gDisplay.setCursor(0, 36);
-  if (strlen(nav.nextRoad) > 0) {
-    gDisplay.print(nav.nextRoad);
+  const char* road = nav.nextRoad[0] != '\0' ? nav.nextRoad : "Proceed to route";
+  constexpr size_t kRoadLineChars = (OLED_WIDTH - 4) / 6;
+  if (strlen(road) > kRoadLineChars) {
+    char roadLine[kRoadLineChars + 1];
+    snprintf(roadLine, sizeof(roadLine), "%.*s...", static_cast<int>(kRoadLineChars - 3), road);
+    gDisplay.setCursor(2, 38);
+    gDisplay.print(roadLine);
   } else {
-    gDisplay.print("Proceed to route");
+    gDisplay.setCursor(2, 38);
+    gDisplay.print(road);
   }
 
-  // 6. Sub-road / maneuver instruction
-  gDisplay.setCursor(0, 50);
-  if (strlen(nav.nextRoadSub) > 0) {
+  // A restrained second line: maneuver cue, or concise ETA/ETE/remaining distance.
+  gDisplay.setCursor(2, 52);
+  if (nav.nextRoadSub[0] != '\0') {
     gDisplay.print(nav.nextRoadSub);
-  } else if (strlen(nav.eta) > 0 && strlen(nav.totalDistance) > 0) {
-    gDisplay.printf("ETA: %s | %s", nav.eta, nav.totalDistance);
+  } else if (nav.ete[0] != '\0' && nav.totalDistance[0] != '\0') {
+    gDisplay.print(nav.ete);
+    gDisplay.print(" ");
+    gDisplay.print(nav.totalDistance);
+  } else if (nav.eta[0] != '\0') {
+    gDisplay.print("ETA ");
+    gDisplay.print(nav.eta);
+  } else if (nav.ete[0] != '\0') {
+    gDisplay.print(nav.ete);
+    gDisplay.print(" left");
   }
 
   gDisplay.display();

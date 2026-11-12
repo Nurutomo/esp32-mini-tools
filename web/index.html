@@ -1731,14 +1731,23 @@
           document.querySelector('#build-tag').textContent = `rev ${commit}`;
         }
         if (builtAt) {
+          const buildDate = new Date(builtAt);
+          const localBuildAt = Number.isNaN(buildDate.getTime())
+            ? builtAt
+            : new Intl.DateTimeFormat(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+                timeZoneName: 'short'
+              }).format(buildDate);
           const buildTimeEl = document.querySelector('#build-time');
           if (buildTimeEl) {
-            buildTimeEl.textContent = `Build: ${builtAt}`;
+            buildTimeEl.textContent = `Build: ${localBuildAt}`;
+            buildTimeEl.title = `Build date and time in your local timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'})`;
             buildTimeEl.style.display = 'inline-flex';
           }
           const footerBuildEl = document.querySelector('#footer-build-info');
           if (footerBuildEl) {
-            footerBuildEl.textContent = `Build: ${builtAt} (${commit ? 'rev ' + commit : ''})`;
+            footerBuildEl.textContent = `Build: ${localBuildAt}${commit ? ` (rev ${commit})` : ''}`;
           }
         }
         if (appVersion) {

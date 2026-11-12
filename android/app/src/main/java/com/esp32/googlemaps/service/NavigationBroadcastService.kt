@@ -47,6 +47,10 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
     private val binder = LocalBinder()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
     private var pingJob: Job? = null
+    private var reconnectJob: Job? = null
+    @Volatile private var reconnectAddress: String? = null
+    @Volatile private var reconnectForceBle: Boolean = false
+    @Volatile private var selectedIconOverrideBase64: String? = null
 
     lateinit var bluetoothController: BluetoothController
         private set
@@ -82,6 +86,11 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         fun sendTestPayload(context: Context, state: NavigationState) {
             instance?.handleNavigationUpdate(state)
         }
+
+        fun sendIconOnly(context: Context, iconBase64: String, iconLabel: String) {
+            val service = instance ?: return
+            service.sendSelectedIcon(iconBase64, iconLabel)
+        }
     }
 
     override fun onCreate() {
@@ -100,11 +109,21 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 startForegroundServiceCompat()
                 startLocationUpdates()
                 startPeriodicPing()
+                if (reconnectAddress == null) {
+                    val prefs = getSharedPreferences("esp32_maps_prefs", Context.MODE_PRIVATE)
+                    val savedAddress = prefs.getString("last_address", null)
+                    if (!savedAddress.isNullOrEmpty()) {
+                        reconnectAddress = savedAddress
+                        reconnectForceBle = prefs.getBoolean("last_is_ble", false)
+                        startAutoReconnect()
+                    }
+                }
             }
             ACTION_STOP -> {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopLocationUpdates()
                 stopPeriodicPing()
+                stopAutoReconnect()
                 bluetoothController.disconnect()
                 stopSelf()
             }
@@ -112,10 +131,14 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 val address = intent.getStringExtra(EXTRA_ADDRESS)
                 val forceBle = intent.getBooleanExtra(EXTRA_FORCE_BLE, false)
                 if (!address.isNullOrEmpty()) {
+                    reconnectAddress = address
+                    reconnectForceBle = forceBle
                     bluetoothController.connect(address, forceBle)
+                    startAutoReconnect()
                 }
             }
             ACTION_DISCONNECT -> {
+                stopAutoReconnect()
                 bluetoothController.disconnect()
             }
         }
@@ -210,6 +233,22 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         }
     }
 
+    private fun sendSelectedIcon(iconBase64: String, iconLabel: String) {
+        if (!bluetoothController.isConnected()) {
+            Timber.w("Cannot send selected icon: Bluetooth is disconnected")
+            return
+        }
+        val message = Esp32Message(
+            navigation = NavigationPayload(
+                nextRoad = iconLabel,
+                iconBase64 = iconBase64
+            ),
+            speed = currentGpsSpeed,
+            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60)
+        )
+        bluetoothController.send(Json.encodeToString(message))
+    }
+
     fun handleNavigationUpdate(state: NavigationState) {
         currentNavState = state
         currentNavState.speed = currentGpsSpeed
@@ -274,6 +313,36 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         pingJob = null
     }
 
+    private fun startAutoReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            var retryDelayMs = 2_000L
+            while (isActive) {
+                val address = reconnectAddress ?: break
+                if (!PermissionHelper.hasBluetoothPermissions(this@NavigationBroadcastService)) {
+                    delay(10_000)
+                    continue
+                }
+                delay(retryDelayMs)
+                when (bluetoothController.state) {
+                    BluetoothController.ConnectionState.DISCONNECTED -> {
+                        Timber.i("Bluetooth disconnected; retrying saved device connection")
+                        bluetoothController.connect(address, reconnectForceBle)
+                        retryDelayMs = (retryDelayMs * 2).coerceAtMost(30_000L)
+                    }
+                    BluetoothController.ConnectionState.CONNECTED -> retryDelayMs = 2_000L
+                    BluetoothController.ConnectionState.CONNECTING -> Unit
+                }
+            }
+        }
+    }
+
+    private fun stopAutoReconnect() {
+        reconnectAddress = null
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
     // BluetoothController.Listener callbacks
     override fun onConnectionStateChanged(state: BluetoothController.ConnectionState, deviceName: String?) {
         LocalBroadcastManager.getInstance(applicationContext).sendBroadcast(
@@ -301,6 +370,7 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         instance = null
         stopLocationUpdates()
         stopPeriodicPing()
+        stopAutoReconnect()
         bluetoothController.disconnect()
     }
 }

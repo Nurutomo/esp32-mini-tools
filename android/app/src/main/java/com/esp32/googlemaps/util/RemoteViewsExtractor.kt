@@ -12,8 +12,20 @@ object RemoteViewsExtractor {
     data class ExtractedData(
         val texts: List<String>,
         val bitmaps: List<Bitmap>,
-        val actionsDebug: List<String>
+        val actionsDebug: List<String>,
+        val bitmapSources: List<String> = emptyList()
     )
+
+    data class IndexedBitmap(val index: Int, val source: String, val bitmap: Bitmap)
+
+    private data class BitmapCandidate(val bitmap: Bitmap, val source: String)
+
+    fun indexedBitmaps(notification: Notification, context: Context, appSourceContext: Context): List<IndexedBitmap> {
+        val extracted = extract(notification, context, appSourceContext)
+        return extracted.bitmaps.mapIndexed { index, bitmap ->
+            IndexedBitmap(index = index + 1, source = extracted.bitmapSources.getOrElse(index) { "RemoteViews bitmap" }, bitmap = bitmap)
+        }
+    }
 
     /**
      * Pure in-memory reflection extractor.
@@ -28,7 +40,7 @@ object RemoteViewsExtractor {
 
     fun extract(notification: Notification, context: Context, appSourceContext: Context): ExtractedData {
         val allTexts = mutableListOf<String>()
-        val allBitmaps = mutableListOf<Bitmap>()
+        val allBitmaps = mutableListOf<BitmapCandidate>()
         val actionsDebug = mutableListOf<String>()
 
         val candidateRemoteViews = mutableListOf<RemoteViews?>()
@@ -61,13 +73,21 @@ object RemoteViewsExtractor {
             }
         }
 
-        return ExtractedData(distinctTexts, allBitmaps, actionsDebug)
+        val indexedBitmaps = allBitmaps.take(3).mapIndexed { index, candidate ->
+            IndexedBitmap(index = index + 1, source = candidate.source, bitmap = candidate.bitmap)
+        }
+        return ExtractedData(
+            texts = distinctTexts,
+            bitmaps = indexedBitmaps.map { it.bitmap },
+            actionsDebug = actionsDebug,
+            bitmapSources = indexedBitmaps.map { it.source }
+        )
     }
 
     private fun extractViaReflection(
         rv: RemoteViews,
         outTexts: MutableList<String>,
-        outBitmaps: MutableList<Bitmap>,
+        outBitmaps: MutableList<BitmapCandidate>,
         outDebug: MutableList<String>,
         seenRv: MutableSet<Int>,
         depth: Int
@@ -93,7 +113,7 @@ object RemoteViewsExtractor {
     private fun inspectAction(
         action: Any,
         outTexts: MutableList<String>,
-        outBitmaps: MutableList<Bitmap>,
+        outBitmaps: MutableList<BitmapCandidate>,
         outDebug: MutableList<String>,
         seenRv: MutableSet<Int>,
         depth: Int
@@ -122,7 +142,7 @@ object RemoteViewsExtractor {
                         name == "methodName" && v is String -> currentMethodName = v
                         name == "viewId" && v is Int -> viewId = v
                         name == "value" -> foundValue = v
-                        name == "bitmap" && v is Bitmap -> outBitmaps.add(v)
+                        name == "bitmap" && v is Bitmap -> foundValue = v
                         (name == "nestedViews" || name == "mNestedViews") && v is RemoteViews -> {
                             if (depth < 3) {
                                 val id = System.identityHashCode(v)
@@ -146,6 +166,13 @@ object RemoteViewsExtractor {
                 } catch (_: Throwable) {}
             }
             clazz = clazz.superclass
+        }
+
+        if (foundValue is Bitmap && outBitmaps.size < 3) {
+            outBitmaps.add(BitmapCandidate(
+                foundValue,
+                "${actionClass.simpleName}.${currentMethodName ?: "bitmap"} viewId=0x${Integer.toHexString(viewId ?: 0)}"
+            ))
         }
 
         if (currentMethodName != null || foundValue != null) {

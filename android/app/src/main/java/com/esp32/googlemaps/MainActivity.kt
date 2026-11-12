@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -35,6 +36,8 @@ import com.esp32.googlemaps.service.NavigationBroadcastService
 import com.esp32.googlemaps.util.BitmapHelper
 import com.esp32.googlemaps.util.DebugLogger
 import com.esp32.googlemaps.util.PermissionHelper
+import com.esp32.googlemaps.util.RemoteViewsExtractor
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,6 +53,9 @@ class MainActivity : AppCompatActivity() {
     private var selectedDeviceName: String? = null
     private var selectedDeviceIsBle: Boolean = false
     private var currentConnectionState = BluetoothController.ConnectionState.DISCONNECTED
+    private var pendingDumpBitmapCandidates: List<RemoteViewsExtractor.IndexedBitmap> = emptyList()
+    private var selectedDumpBitmapIndex: Int = 1
+    private val selectedBitmapPrefs by lazy { getSharedPreferences("esp32_maps_prefs", Context.MODE_PRIVATE) }
 
     private val navReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -492,10 +498,28 @@ class MainActivity : AppCompatActivity() {
     private fun dumpNotificationsAndShowDialog() {
         lifecycleScope.launch {
             try {
-                val json = withContext(Dispatchers.IO) {
-                    GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity)
+                val result = withContext(Dispatchers.IO) {
+                    val notifications = GoogleMapsNotificationListener.getActiveNotificationsList()
+                    val sbn = notifications?.firstOrNull {
+                        GoogleMapsNotificationListener.isNavigationNotification(it)
+                    }
+                    val candidates = sbn?.notification?.let { notification ->
+                        val appContext = try {
+                            createPackageContext(sbn.packageName, Context.CONTEXT_IGNORE_SECURITY)
+                        } catch (_: Exception) {
+                            this@MainActivity
+                        }
+                        RemoteViewsExtractor.indexedBitmaps(notification, this@MainActivity, appContext)
+                    }.orEmpty()
+                    GoogleMapsNotificationListener.dumpActiveNotificationsJson(this@MainActivity) to candidates
                 }
-                showDumpJsonDialog(json)
+                pendingDumpBitmapCandidates = result.second
+                selectedDumpBitmapIndex = selectedBitmapPrefs.getInt("remote_views_bitmap_index", 1)
+                    .coerceIn(1, result.second.size.coerceAtLeast(1))
+                GoogleMapsNotificationListener.setPreferredRemoteViewsBitmapIndex(
+                    if (result.second.any { it.index == selectedDumpBitmapIndex }) selectedDumpBitmapIndex else null
+                )
+                showDumpJsonDialog(result.first)
             } catch (t: Throwable) {
                 DebugLogger.log("DUMP", "Dump error: ${t.message}", DebugLogger.Level.ERROR)
             }
@@ -548,9 +572,63 @@ class MainActivity : AppCompatActivity() {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 800)
         }
 
+        val dialogContent = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(16, 8, 16, 0)
+        }
+        if (pendingDumpBitmapCandidates.isNotEmpty()) {
+            val candidates = pendingDumpBitmapCandidates
+            val preview = android.widget.ImageView(this).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(96, 96).apply {
+                    gravity = android.view.Gravity.CENTER_HORIZONTAL
+                    bottomMargin = 8
+                }
+                setBackgroundColor(Color.BLACK)
+                setPadding(12, 12, 12, 12)
+                setImageBitmap(BitmapHelper.bitmapToBase64(candidates.first().bitmap).second)
+                adjustViewBounds = true
+            }
+            val candidateLabels = candidates.map { candidate ->
+                "#${candidate.index}: ${candidate.source} (${candidate.bitmap.width}×${candidate.bitmap.height})"
+            }.toTypedArray()
+            val selector = android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    candidateLabels
+                )
+                setSelection((selectedDumpBitmapIndex - 1).coerceIn(candidates.indices))
+                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                    override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                        selectedDumpBitmapIndex = candidates[position].index
+                        selectedBitmapPrefs.edit().putInt("remote_views_bitmap_index", selectedDumpBitmapIndex).apply()
+                        GoogleMapsNotificationListener.setPreferredRemoteViewsBitmapIndex(selectedDumpBitmapIndex)
+                        val monoPreview = BitmapHelper.bitmapToBase64(candidates[position].bitmap).second
+                        preview.setImageBitmap(monoPreview)
+                    }
+                }
+            }
+            val sendButton = com.google.android.material.button.MaterialButton(this).apply {
+                text = "Use selected icon on OLED"
+                setOnClickListener {
+                    sendSelectedDumpBitmap(candidates[selectedDumpBitmapIndex.coerceIn(1, candidates.size) - 1].bitmap)
+                }
+            }
+            dialogContent.addView(preview)
+            dialogContent.addView(selector)
+            dialogContent.addView(sendButton)
+        } else {
+            dialogContent.addView(TextView(this).apply {
+                text = "No RemoteViews bitmap candidates found in this notification."
+                setPadding(8, 8, 8, 8)
+            })
+        }
+        dialogContent.addView(scrollContainer)
+
         MaterialAlertDialogBuilder(this)
-            .setTitle("Active Notifications Dump (JSON)")
-            .setView(scrollContainer)
+            .setTitle("Notification Dump · Icon Debug")
+            .setView(dialogContent)
             .setPositiveButton("Copy Full JSON") { _, _ ->
                 clipboard.setPrimaryClip(ClipData.newPlainText("Notifications JSON", json))
                 Toast.makeText(this, "Full JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
@@ -565,6 +643,23 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun sendSelectedDumpBitmap(bitmap: Bitmap) {
+        val (base64, monoBitmap) = BitmapHelper.bitmapToBase64(bitmap)
+        if (base64.isEmpty()) {
+            Toast.makeText(this, "Could not convert selected bitmap", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        binding.previewManeuverIcon.setImageBitmap(monoBitmap)
+        GoogleMapsNotificationListener.setPreferredRemoteViewsBitmapIndex(selectedDumpBitmapIndex)
+        NavigationBroadcastService.sendIconOnly(
+            this,
+            base64,
+            "Icon #$selectedDumpBitmapIndex"
+        )
+        Toast.makeText(this, "Converted icon #$selectedDumpBitmapIndex to 32×32 and sent it", Toast.LENGTH_SHORT).show()
     }
 
     private fun updateHudPreview(state: NavigationState) {

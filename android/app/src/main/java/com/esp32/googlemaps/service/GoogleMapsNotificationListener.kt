@@ -35,6 +35,13 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
         const val EXTRA_NAV_STATE = "nav_state"
 
         private var activeInstance: GoogleMapsNotificationListener? = null
+        @Volatile private var preferredRemoteViewsBitmapIndex: Int? = null
+
+        fun setPreferredRemoteViewsBitmapIndex(index: Int?) {
+            preferredRemoteViewsBitmapIndex = index?.coerceIn(1, 3)
+        }
+
+        fun preferredRemoteViewsBitmapIndex(): Int? = preferredRemoteViewsBitmapIndex
 
         fun isConnected(): Boolean = activeInstance != null
 
@@ -126,6 +133,10 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             RegexOption.IGNORE_CASE
         )
 
+        private val COORDINATE_DECORATION_REGEX = Regex(
+            """(?i)\s*[-–—]?\s*\d{1,2}[:.]\d{2}\s*(?:ETA|Tiba)?\s*$"""
+        )
+
         private val COORDINATE_REGEX = Regex(
             """\b\d{1,2}°\d{1,2}'[\d.]+"?[NSEW]\b""",
             RegexOption.IGNORE_CASE
@@ -173,7 +184,15 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 val standardTexts = extractStandardExtrasTexts(notification)
                 val allCandidateTexts = (standardTexts + rvData.texts).filter { it.isNotBlank() }.distinct()
 
-                extractNavData(sbn, allCandidateTexts, rvData.bitmaps, notification, context, appCtx)
+                extractNavData(
+                    sbn,
+                    allCandidateTexts,
+                    rvData.bitmaps,
+                    notification,
+                    context,
+                    appCtx,
+                    preferredRemoteViewsBitmapIndex
+                )
             } catch (e: Exception) {
                 Timber.e("parseNotificationStatic error: ${e.message}")
                 null
@@ -218,7 +237,8 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             candidateBitmaps: List<Bitmap>,
             notification: Notification,
             context: Context,
-            appSourceContext: Context
+            appSourceContext: Context,
+            selectedBitmapIndex: Int? = null
         ): NavigationState? {
             var distance = ""
             var nextRoad = ""
@@ -242,6 +262,11 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                         val timeMatch = CLOCK_TIME_REGEX.find(trimmed)
                         if (timeMatch != null) eta = cleanEtaString(timeMatch.value)
                     }
+                    val withoutCoordinates = COORDINATE_REGEX.replace(trimmed, " ")
+                    val nonCoordinatePart = COORDINATE_DECORATION_REGEX.replace(withoutCoordinates, "")
+                        .replace(Regex("""^[\s\-–•·,:]+|[\s\-–•·,:]+$"""), "")
+                        .trim()
+                    if (nonCoordinatePart.isNotEmpty()) nonSummaryTexts.add(nonCoordinatePart)
                     continue
                 }
 
@@ -362,11 +387,13 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 }
             }
 
-            // 6. Maneuver Icon Resolution
-            var finalBitmap: Bitmap? = extractIcon(notification, context, appSourceContext)
-            if (finalBitmap == null && candidateBitmaps.isNotEmpty()) {
-                finalBitmap = candidateBitmaps.first()
-            }
+            // 6. Maneuver Icon Resolution. An explicit debug selection (1-based) wins,
+            // otherwise choose a bitmap RemoteViews action before generic notification icons.
+            var finalBitmap: Bitmap? = selectedBitmapIndex
+                ?.takeIf { it in 1..candidateBitmaps.size }
+                ?.let { candidateBitmaps[it - 1] }
+                ?: candidateBitmaps.firstOrNull()
+                ?: extractIcon(notification, context, appSourceContext)
 
             // If still null, synthesize arrow based on keywords in all candidate texts
             if (finalBitmap == null) {
@@ -388,7 +415,10 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
                 }
             }
 
-            val (iconBase64, monoBmp) = BitmapHelper.bitmapToBase64(finalBitmap)
+            val selectedBitmap = selectedBitmapIndex
+                ?.takeIf { it in 1..candidateBitmaps.size }
+                ?.let { candidateBitmaps[it - 1] }
+            val (iconBase64, monoBmp) = BitmapHelper.bitmapToBase64(selectedBitmap ?: finalBitmap)
 
             return NavigationState(
                 nextRoad = nextRoad,
@@ -573,6 +603,14 @@ class GoogleMapsNotificationListener : NotificationListenerService() {
             DebugLogger.Level.DEBUG
         )
 
-        return extractNavData(sbn, candidateTexts, rvData.bitmaps, notification, this, appSourceContext)
+        return extractNavData(
+            sbn,
+            candidateTexts,
+            rvData.bitmaps,
+            notification,
+            this,
+            appSourceContext,
+            preferredRemoteViewsBitmapIndex
+        )
     }
 }

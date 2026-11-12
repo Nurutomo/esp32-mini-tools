@@ -115,6 +115,16 @@ object NotificationDumpHelper {
             rvData.texts.forEach { rvTextsArray.put(it) }
             rvObj.put("extractedTexts", rvTextsArray)
             rvObj.put("extractedBitmapsCount", rvData.bitmaps.size)
+            val bitmapCandidates = JSONArray()
+            rvData.bitmaps.forEachIndexed { index, bitmap ->
+                bitmapCandidates.put(JSONObject().apply {
+                    put("index", index + 1)
+                    put("source", rvData.bitmapSources.getOrElse(index) { "RemoteViews bitmap" })
+                    put("width", bitmap.width)
+                    put("height", bitmap.height)
+                })
+            }
+            rvObj.put("bitmapCandidates", bitmapCandidates)
 
             val debugActionsArray = JSONArray()
             rvData.actionsDebug.take(35).forEach { debugActionsArray.put(it) }
