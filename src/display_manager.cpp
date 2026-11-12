@@ -1,4 +1,5 @@
 #include "display_manager.h"
+#include "display_manager_internal.h"
 #include "config.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>

@@ -3,12 +3,14 @@
 #include "navigation_state.h"
 #include "display_manager.h"
 #include "bluetooth_manager.h"
+#include "ui_manager.h"
+#include "ui_display.h"
 
 namespace {
 
 constexpr char kDeviceName[] = "ESP32-OLED";
-constexpr uint32_t kBlinkDelayMs = 500;
-constexpr uint32_t kDisplayIntervalMs = 500;
+constexpr uint32_t kBlinkDelayMs = 250;
+constexpr uint32_t kDisplayIntervalMs = 50;
 constexpr uint8_t kDefaultAnalogInputPin = 0;
 constexpr uint32_t kAnalogReadIntervalMs = 50;
 constexpr size_t kSerialCommandSize = 48;
@@ -16,16 +18,6 @@ constexpr size_t kSerialCommandSize = 48;
 volatile uint8_t gRequestedAnalogPin = kDefaultAnalogInputPin;
 volatile uint8_t gActiveAnalogPin = kDefaultAnalogInputPin;
 volatile uint16_t gAnalogInputValue = 0;
-constexpr uint16_t kButtonTolerance = 180;
-constexpr uint32_t kSelectLongPressMs = 800;
-constexpr uint8_t kMenuItemCount = 3;
-uint8_t gSelectedMenuItem = 0;
-bool gMenuOpen = false;
-bool gButtonMonitorOpen = false;
-bool gButton2Down = false;
-bool gButton2LongHandled = false;
-uint32_t gButton2DownMs = 0;
-uint32_t gLastButtonActionMs = 0;
 char gSerialCommand[kSerialCommandSize];
 size_t gSerialCommandLength = 0;
 
@@ -73,70 +65,6 @@ void processSerialCommand(const char* command) {
   }
   if (command[0] != '\0') {
     Serial.println("Unknown command. Use 'apin <GPIO>' or 'apin?'.");
-  }
-}
-
-bool nearAdcValue(uint16_t value, uint16_t target) {
-  return value >= target - kButtonTolerance && value <= target + kButtonTolerance;
-}
-
-uint8_t detectButtonMask(uint16_t value) {
-  if (nearAdcValue(value, 4095)) return 0x01;
-  if (nearAdcValue(value, 2700)) return 0x06;
-  if (nearAdcValue(value, 2270)) return 0x02;
-  if (nearAdcValue(value, 1410)) return 0x04;
-  return 0;
-}
-
-const char* buttonLabel(uint8_t mask) {
-  switch (mask) {
-    case 0x01: return "BTN 1";
-    case 0x02: return "BTN 2";
-    case 0x04: return "BTN 3";
-    case 0x06: return "BTN 2+3";
-    default: return "NONE";
-  }
-}
-
-void pollUiButtons(uint8_t buttonMask, uint32_t now) {
-  if (buttonMask == 0x02 && !gButton2Down) {
-    gButton2Down = true;
-    gButton2LongHandled = false;
-    gButton2DownMs = now;
-  }
-
-  if (gButton2Down && !gButton2LongHandled && now - gButton2DownMs >= kSelectLongPressMs) {
-    // Long press always goes back one level; from the HUD it opens no menu.
-    if (gButtonMonitorOpen) gButtonMonitorOpen = false;
-    else gMenuOpen = false;
-    gButton2LongHandled = true;
-    gLastButtonActionMs = now;
-  }
-
-  if (buttonMask != 0x02 && gButton2Down) {
-    gButton2Down = false;
-    if (!gButton2LongHandled && now - gLastButtonActionMs >= 180) {
-      if (gButtonMonitorOpen) {
-        // A short select on the monitor returns to the menu.
-        gButtonMonitorOpen = false;
-        gMenuOpen = true;
-      } else if (gMenuOpen) {
-        if (gSelectedMenuItem == 0) gMenuOpen = false;
-        else if (gSelectedMenuItem == 1) gButtonMonitorOpen = true;
-      } else {
-        gMenuOpen = true;
-      }
-      gLastButtonActionMs = now;
-    }
-  }
-
-  if (!gMenuOpen || gButtonMonitorOpen || now - gLastButtonActionMs < 180) return;
-  if (buttonMask == 0x01) {
-    if (gSelectedMenuItem > 0) --gSelectedMenuItem;
-    gLastButtonActionMs = now;
-  } else if (buttonMask == 0x04) {
-    if (gSelectedMenuItem + 1 < kMenuItemCount) ++gSelectedMenuItem;
-    gLastButtonActionMs = now;
   }
 }
 
@@ -215,7 +143,8 @@ void setup() {
     Serial.println("[I2C] OLED not detected; will retry I2C hotplug detection.");
   }
 
-  // Initialize Bluetooth
+  // Initialize the button/menu UI and Bluetooth.
+  ui::begin();
   initBluetooth(kDeviceName, onBluetoothPacket);
   Serial.printf("Analog input pin: GPIO %u. Type 'apin?' for value/help, 'apin <GPIO>' to change.\n",
                 gActiveAnalogPin);
@@ -230,8 +159,9 @@ void loop() {
 
   // The analog-input task samples independently; decode the resistor ladder for UI input.
   const uint16_t analogValue = gAnalogInputValue;
-  const uint8_t buttons = detectButtonMask(analogValue);
-  pollUiButtons(buttons, now);
+  ui::update(analogValue, now);
+  const ui::Button button = ui::detectButton(analogValue);
+  const ui::State& uiState = ui::state();
 
   // Probe/reconnect OLED periodically, or blink LED while it is absent.
   if (isDisplayReady()) {
@@ -242,10 +172,10 @@ void loop() {
       lastDisplayMs = now;
       cycleCount++;
 
-      if (gButtonMonitorOpen) {
-        renderButtonMonitor(analogValue, gActiveAnalogPin, buttonLabel(buttons));
-      } else if (gMenuOpen) {
-        renderMenuScreen(gSelectedMenuItem, "Main menu", nullptr);
+      if (uiState.buttonMonitorOpen) {
+        ui::display::renderButtonMonitor(analogValue, gActiveAnalogPin, ui::buttonLabel(button));
+      } else if (uiState.menuOpen) {
+        ui::display::renderMenu(uiState.selectedItem);
       } else {
         updateDisplay(getBluetoothStatus(), getLastTextMessage(), cycleCount);
       }
