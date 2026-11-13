@@ -869,7 +869,7 @@
           </div>
           <div class="spec-item">
             <span class="spec-label">Upload Rate</span>
-            <span class="spec-value">460800 baud</span>
+            <span class="spec-value">1500000 baud</span>
           </div>
         </div>
 
@@ -1530,7 +1530,7 @@
         const transport = new window.Transport(activePort, false);
         esploader = new window.ESPLoader({
           transport,
-          baudrate: 460800,
+          baudrate: 1500000,
           romBaudrate: 115200,
           terminal: espFlasherTerminal
         });
