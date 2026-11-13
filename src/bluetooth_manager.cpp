@@ -25,6 +25,9 @@ BluetoothSerial gClassicSerial;
 NimBLECharacteristic* gpTxCharacteristic = nullptr;
 static std::string gBleRxAccumulator = "";
 static uint32_t gLastBleRxMs = 0;
+NimBLEScan* gpScanner = nullptr;
+BluetoothDeviceInfo gNearbyDevices[kMaxNearbyBluetoothDevices]{};
+uint8_t gNearbyDeviceCount = 0;
 #endif
 
 portMUX_TYPE gBtMux = portMUX_INITIALIZER_UNLOCKED;
@@ -54,6 +57,18 @@ void sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* /* param */) {
   }
 }
 #else
+class ScanCallbacks final : public NimBLEScanCallbacks {
+  void onResult(const NimBLEAdvertisedDevice* device) override {
+    if (device == nullptr || gNearbyDeviceCount >= kMaxNearbyBluetoothDevices) return;
+    BluetoothDeviceInfo& result = gNearbyDevices[gNearbyDeviceCount++];
+    const std::string name = device->getName();
+    const char* label = name.empty() ? "(unnamed)" : name.c_str();
+    strncpy(result.name, label, sizeof(result.name) - 1);
+    result.name[sizeof(result.name) - 1] = '\0';
+    result.rssi = device->getRSSI();
+  }
+};
+
 class ServerCallbacks final : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     gConnected = true;
@@ -136,6 +151,10 @@ void initBluetooth(const char* deviceName, PacketReceivedCallback onPacket) {
 #else
   strncpy(gLastMessage, "Ready (BLE)", sizeof(gLastMessage) - 1);
   NimBLEDevice::init(deviceName);
+  gpScanner = NimBLEDevice::getScan();
+  static ScanCallbacks scanCallbacks;
+  gpScanner->setScanCallbacks(&scanCallbacks, false);
+  gpScanner->setActiveScan(true);
   NimBLEServer* server = NimBLEDevice::createServer();
   static ServerCallbacks serverCallbacks;
   server->setCallbacks(&serverCallbacks);
@@ -216,6 +235,27 @@ void updateBluetooth() {
       sendBluetoothResponse("OK\r\n");
     }
   }
+#endif
+}
+
+void startBluetoothScan() {
+#if !(defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32))
+  if (gpScanner == nullptr || gpScanner->isScanning()) return;
+  gNearbyDeviceCount = 0;
+  gpScanner->start(5, false, true);
+#endif
+}
+
+uint8_t getNearbyBluetoothDevices(BluetoothDeviceInfo* devices, uint8_t capacity) {
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+  (void)devices;
+  (void)capacity;
+  return 0;
+#else
+  if (devices == nullptr) return 0;
+  const uint8_t count = gNearbyDeviceCount < capacity ? gNearbyDeviceCount : capacity;
+  memcpy(devices, gNearbyDevices, count * sizeof(BluetoothDeviceInfo));
+  return count;
 #endif
 }
 

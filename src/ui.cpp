@@ -7,6 +7,7 @@
 #include "ui/display.h"
 #include "ui/navigation.h"
 #include "ui/settings.h"
+#include "bluetooth_manager.h"
 
 namespace ui {
 
@@ -22,9 +23,12 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
     case Screen::About:
       about::render();
       break;
-    case Screen::BluetoothInfo:
-      bluetoothInfo::render(status);
+    case Screen::BluetoothInfo: {
+      BluetoothDeviceInfo devices[kMaxNearbyBluetoothDevices];
+      const uint8_t count = getNearbyBluetoothDevices(devices, kMaxNearbyBluetoothDevices);
+      bluetoothInfo::render(status, devices, count, current.selectedBluetoothDevice);
       break;
+    }
     case Screen::Settings:
       settings::render(current.pins, current.settingsOption);
       break;

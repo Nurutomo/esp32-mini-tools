@@ -420,7 +420,41 @@ void text(const char* title, const char* body) {
   gDisplay.display();
 }
 
-void menu(uint8_t selectedItem) {
+void text(const char* title, const char* body, const BluetoothDeviceInfo* devices, uint8_t count,
+          uint8_t selectedDevice) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(2, 3);
+  gDisplay.print(title);
+  gDisplay.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+  if (count == 0) {
+    gDisplay.setCursor(2, 23);
+    gDisplay.print("Scanning...");
+    gDisplay.setCursor(2, 36);
+    gDisplay.print(body);
+  } else {
+    const uint8_t first = selectedDevice > 2 ? selectedDevice - 2 : 0;
+    for (uint8_t row = 0; row < 5 && first + row < count; ++row) {
+      const uint8_t index = first + row;
+      const int16_t y = 18 + row * 9;
+      if (index == selectedDevice) {
+        gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 9, 2, SSD1306_WHITE);
+        gDisplay.setTextColor(SSD1306_BLACK);
+      } else gDisplay.setTextColor(SSD1306_WHITE);
+      gDisplay.setCursor(4, y);
+      gDisplay.printf("%.14s %d dBm", devices[index].name, devices[index].rssi);
+    }
+    gDisplay.setTextColor(SSD1306_WHITE);
+    gDisplay.setCursor(2, 59);
+    gDisplay.print("Btn1/3 Browse  Btn2 Back");
+  }
+  gDisplay.display();
+}
+
+void menu(uint8_t selectedItem, const char* const* items, uint8_t itemCount) {
   if (!gDisplayReady) return;
   prepareForI2C();
   gDisplay.clearDisplay();
@@ -430,8 +464,7 @@ void menu(uint8_t selectedItem) {
   gDisplay.setCursor(2, 2);
   gDisplay.print("Main menu");
   gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
-  static const char* const items[] = {"Navigation", "Button monitor", "About", "Bluetooth info", "Settings"};
-  for (uint8_t i = 0; i < 5; ++i) {
+  for (uint8_t i = 0; i < itemCount && i < 4; ++i) {
     const int16_t y = 19 + i * 10;
     if (i == selectedItem) {
       gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 10, 2, SSD1306_WHITE);

@@ -4,6 +4,7 @@
 #include "ui/menu.h"
 #include "ui/buzzer.h"
 #include "ui/settings.h"
+#include "bluetooth_manager.h"
 
 namespace ui {
 namespace {
@@ -28,18 +29,18 @@ void select() {
     return;
   }
   if (gState.screen != Screen::Menu) return;
-  switch (gState.selectedItem) {
-    case 0: gState.screen = Screen::Navigation; break;
-    case 1: gState.screen = Screen::ButtonMonitor; break;
-    case 2: gState.screen = Screen::About; break;
-    case 3: gState.screen = Screen::BluetoothInfo; break;
-    case 4: gState.screen = Screen::Settings; break;
+  const menu::Item* items = menu::items();
+  if (gState.selectedItem >= menu::itemCount()) return;
+  gState.screen = static_cast<Screen>(items[gState.selectedItem].screen);
+  if (gState.screen == Screen::BluetoothInfo) {
+    gState.selectedBluetoothDevice = 0;
+    startBluetoothScan();
   }
 }
 
 void back() {
   buzzer::beep(1400, 70);
-  if (gState.screen == Screen::Settings) {
+  if (gState.screen == Screen::Settings || gState.screen == Screen::BluetoothInfo) {
     gState.screen = Screen::Menu;
     return;
   }
@@ -47,7 +48,6 @@ void back() {
     case Screen::Navigation:
     case Screen::ButtonMonitor:
     case Screen::About:
-    case Screen::BluetoothInfo:
       gState.screen = Screen::Menu;
       break;
     default:
@@ -106,6 +106,17 @@ void update(uint16_t analogValue, uint32_t now) {
       if (gState.settingsOption == 0) gState.settingsOption = 1;
       else settings::edit(gState.pins, gState.settingsOption, -1, 21);
       buzzer::setPin(gState.pins.buzzer);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::BluetoothInfo &&
+               (button == Button::One || button == Button::Three)) {
+      BluetoothDeviceInfo devices[kMaxNearbyBluetoothDevices];
+      const uint8_t count = getNearbyBluetoothDevices(devices, kMaxNearbyBluetoothDevices);
+      if (count > 0) {
+        if (button == Button::One && gState.selectedBluetoothDevice + 1 < count)
+          ++gState.selectedBluetoothDevice;
+        else if (button == Button::Three && gState.selectedBluetoothDevice > 0)
+          --gState.selectedBluetoothDevice;
+      }
       gLastActionMs = now;
     }
   }

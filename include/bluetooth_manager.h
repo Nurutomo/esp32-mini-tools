@@ -9,11 +9,20 @@ constexpr size_t kMaxPacketBytes = 1024;
 
 typedef void (*PacketReceivedCallback)(const char* packet, size_t len);
 
+struct BluetoothDeviceInfo {
+  char name[24];
+  int rssi;
+};
+
+constexpr uint8_t kMaxNearbyBluetoothDevices = 8;
+
 // Initialize Bluetooth subsystem (Classic BT on ESP32 Classic target, NimBLE BLE on C3/S3/others)
 void initBluetooth(const char* deviceName, PacketReceivedCallback onPacket);
 
 // Periodic update loop (handles chunk timeouts, line flushing, and connection events)
 void updateBluetooth();
+void startBluetoothScan();
+uint8_t getNearbyBluetoothDevices(BluetoothDeviceInfo* devices, uint8_t capacity);
 
 // Query Bluetooth connection and status
 bool isBluetoothConnected();

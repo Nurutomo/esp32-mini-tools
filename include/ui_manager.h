@@ -25,6 +25,7 @@ enum class Screen : uint8_t {
 struct State {
   Screen screen = Screen::Navigation;
   uint8_t selectedItem = 0;
+  uint8_t selectedBluetoothDevice = 0;
   uint8_t settingsOption = 0;
   settings::Pins pins{settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin};
 };
