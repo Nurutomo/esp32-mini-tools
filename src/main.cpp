@@ -16,6 +16,10 @@ constexpr uint32_t kDisplayIntervalMs = 25;
 constexpr uint8_t kDefaultAnalogInputPin = 0;
 constexpr uint8_t kDefaultBuzzerPin = 10;
 constexpr uint32_t kAnalogReadIntervalMs = 25;
+constexpr uint32_t kBootAnimationMs = 1200;
+constexpr uint16_t kBootMelodyHz[] = {659, 784, 988, 1319};
+constexpr uint16_t kBootNoteMs = 90;
+constexpr uint16_t kBootGapMs = 35;
 constexpr size_t kSerialCommandSize = 48;
 
 volatile uint8_t gRequestedAnalogPin = kDefaultAnalogInputPin;
@@ -130,8 +134,13 @@ void pollSerialCommands() {
 
 // Packet handler dispatched by Bluetooth Manager
 void onBluetoothPacket(const char* packet, size_t len) {
+  const bool wasNavigationActive = isNavigationActive();
+  const bool wasNewTurn = getNavigationData().newTurnManeuver;
   if (processNavigationJson(packet, len)) {
     const NavigationData& nav = getNavigationData();
+    if (nav.active && (!wasNavigationActive || (!wasNewTurn && nav.newTurnManeuver))) {
+      ui::buzzer::beep(330, 180);
+    }
     if (Serial.availableForWrite() > 0) {
       Serial.printf("[NAV RX] Road: '%s' | Dist: '%s' | Speed: %d km/h\n",
                     nav.nextRoad, nav.distance, nav.speed);
@@ -153,6 +162,17 @@ void setup() {
   turnLedOff();
 
   ui::begin();
+  const uint32_t bootStartedMs = millis();
+  for (uint8_t note = 0; note < sizeof(kBootMelodyHz) / sizeof(kBootMelodyHz[0]); ++note) {
+    ui::buzzer::beep(kBootMelodyHz[note], kBootNoteMs);
+    const uint32_t noteEndMs = millis() + kBootNoteMs + kBootGapMs;
+    while (static_cast<int32_t>(millis() - noteEndMs) < 0) {
+      ui::buzzer::update(millis());
+      if (isDisplayReady()) renderBootAnimation(millis() - bootStartedMs);
+      delay(5);
+    }
+  }
+  ui::buzzer::stop();
   gRequestedAnalogPin = ui::state().pins.analogButton;
   gActiveAnalogPin = ui::state().pins.analogButton;
   pinMode(gActiveAnalogPin, INPUT);

@@ -71,7 +71,9 @@ void renderRoadMarquee(const char* road) {
   if (gScrollPaused && elapsed >= kScrollPauseMs) {
     gScrollPaused = false;
   }
-  if (!gScrollPaused) {
+  static uint32_t lastScrollTickMs = 0;
+  if (!gScrollPaused && (millis() - lastScrollTickMs >= 100)) {
+    lastScrollTickMs = millis();
     gScrollOffsetPx += kScrollPxPerTick;
     // Once the text has fully scrolled off the left edge, loop back.
     const int16_t maxScroll = textW + kCharW * 2;  // a small gap before looping
@@ -82,25 +84,16 @@ void renderRoadMarquee(const char* road) {
     }
   }
 
-  // Draw using a 1-bit canvas so we can clip the region correctly.
-  // Canvas width = full text width; blit only the visible slice into the frame buffer.
-  const int16_t canvasW = textW + kCharW * 2;
-  GFXcanvas1 canvas(canvasW, 8);
-  canvas.setTextSize(1);
-  canvas.setTextWrap(false);
-  canvas.setTextColor(1);
-  canvas.setCursor(0, 0);
-  canvas.print(road);
-
-  // Blit the visible slice [gScrollOffsetPx .. gScrollOffsetPx + kRoadW - 1] onto the display.
-  for (int16_t dx = 0; dx < kRoadW; dx++) {
-    const int16_t srcX = gScrollOffsetPx + dx;
-    if (srcX < 0 || srcX >= canvasW) continue;
-    for (int16_t dy = 0; dy < 8; dy++) {
-      if (canvas.getPixel(srcX, dy)) {
-        gDisplay.drawPixel(kRoadX + dx, kRoadY + dy, SSD1306_WHITE);
-      }
-    }
+  // Draw characters directly without heap allocation (no GFXcanvas1 malloc)
+  const int16_t roadLen = static_cast<int16_t>(strlen(road));
+  const int16_t startChar = gScrollOffsetPx > 0 ? (gScrollOffsetPx / kCharW) : 0;
+  for (int16_t i = startChar; i < roadLen; ++i) {
+    const int16_t charX = kRoadX + (i * kCharW) - gScrollOffsetPx;
+    if (charX >= OLED_WIDTH) break;
+    gDisplay.drawChar(charX, kRoadY, road[i], SSD1306_WHITE, SSD1306_BLACK, 1);
+  }
+  if (kRoadX > 0) {
+    gDisplay.fillRect(0, kRoadY, kRoadX, 8, SSD1306_BLACK);
   }
 }
 
@@ -159,6 +152,22 @@ bool initDisplay(uint8_t sdaPin, uint8_t sclPin) {
   gDisplayAddress = scanOledAddress();
   gDisplayReady = (gDisplayAddress != 0);
   return gDisplayReady;
+}
+
+void renderBootAnimation(uint32_t elapsedMs) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(28, 8);
+  gDisplay.print("ESP32 Studio");
+  gDisplay.drawRoundRect(14, 27, 100, 14, 4, SSD1306_WHITE);
+  const uint8_t progress = elapsedMs >= 1200 ? 96 : elapsedMs * 96 / 1200;
+  gDisplay.fillRoundRect(16, 29, progress, 10, 3, SSD1306_WHITE);
+  gDisplay.setCursor(36, 51);
+  gDisplay.print("Starting...");
+  gDisplay.display();
 }
 
 bool isDisplayReady() {

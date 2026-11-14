@@ -11,6 +11,7 @@ void prepareForI2C();
 
 // Display lifecycle & rendering
 bool initDisplay(uint8_t sdaPin, uint8_t sclPin);
+void renderBootAnimation(uint32_t elapsedMs);
 bool isDisplayReady();
 uint8_t getDisplayAddress();
 

@@ -95,36 +95,16 @@ void handleBleRxBytes(const uint8_t* data, size_t len) {
   if (len == 0 || data == nullptr) return;
   const uint32_t now = millis();
 
+  portENTER_CRITICAL(&gBtMux);
   if (!gBleRxAccumulator.empty() && (now - gLastBleRxMs > 500)) {
     gBleRxAccumulator.clear();
   }
   gLastBleRxMs = now;
-
   gBleRxAccumulator.append(reinterpret_cast<const char*>(data), len);
-
-  size_t nlPos = gBleRxAccumulator.find('\n');
-  while (nlPos != std::string::npos) {
-    std::string packet = gBleRxAccumulator.substr(0, nlPos);
-    gBleRxAccumulator.erase(0, nlPos + 1);
-
-    while (!packet.empty() && (packet.back() == '\r' || packet.back() == ' ')) {
-      packet.pop_back();
-    }
-    while (!packet.empty() && (packet.front() == '\r' || packet.front() == ' ')) {
-      packet.erase(0, 1);
-    }
-
-    if (!packet.empty()) {
-      dispatchPacket(packet.c_str(), packet.size());
-      sendBluetoothResponse("OK\r\n");
-    }
-
-    nlPos = gBleRxAccumulator.find('\n');
-  }
-
   if (gBleRxAccumulator.size() > kMaxPacketBytes * 2) {
     gBleRxAccumulator.clear();
   }
+  portEXIT_CRITICAL(&gBtMux);
 }
 
 class TextCallbacks final : public NimBLECharacteristicCallbacks {
@@ -223,12 +203,30 @@ void updateBluetooth() {
     rxLen = 0;
   }
 #else
-  // Flush un-terminated BLE packet after 150ms idle
-  if (!gBleRxAccumulator.empty() && (now - gLastBleRxMs >= 150)) {
-    std::string packet = gBleRxAccumulator;
-    gBleRxAccumulator.clear();
+  for (;;) {
+    std::string packet;
+    bool hasPacket = false;
+
+    portENTER_CRITICAL(&gBtMux);
+    size_t nlPos = gBleRxAccumulator.find('\n');
+    if (nlPos != std::string::npos) {
+      packet = gBleRxAccumulator.substr(0, nlPos);
+      gBleRxAccumulator.erase(0, nlPos + 1);
+      hasPacket = true;
+    } else if (!gBleRxAccumulator.empty() && (now - gLastBleRxMs >= 150)) {
+      packet = gBleRxAccumulator;
+      gBleRxAccumulator.clear();
+      hasPacket = true;
+    }
+    portEXIT_CRITICAL(&gBtMux);
+
+    if (!hasPacket) break;
+
     while (!packet.empty() && (packet.back() == '\r' || packet.back() == '\n' || packet.back() == ' ')) {
       packet.pop_back();
+    }
+    while (!packet.empty() && (packet.front() == '\r' || packet.front() == '\n' || packet.front() == ' ')) {
+      packet.erase(0, 1);
     }
     if (!packet.empty()) {
       dispatchPacket(packet.c_str(), packet.size());
