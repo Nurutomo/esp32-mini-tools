@@ -7,6 +7,9 @@
 #include "ui.h"
 #include "ui/buzzer.h"
 #include "ui/settings.h"
+#if defined(USE_WIFI)
+#include "wifi_manager.h"
+#endif
 
 namespace {
 
@@ -22,7 +25,7 @@ constexpr uint32_t kBootAnimationMs = 1200;
 constexpr uint16_t kBootMelodyHz[] = {659, 784, 988, 1319};
 constexpr uint16_t kBootNoteMs = 90;
 constexpr uint16_t kBootGapMs = 35;
-constexpr size_t kSerialCommandSize = 48;
+constexpr size_t kSerialCommandSize = 192;
 
 volatile uint8_t gRequestedAnalogPin = kDefaultAnalogInputPin;
 volatile uint8_t gActiveAnalogPin = kDefaultAnalogInputPin;
@@ -68,7 +71,7 @@ bool isAdcCapablePin(long pin) {
 void processSerialCommand(const char* command) {
   if (strcmp(command, "save") == 0) {
     const ui::State& state = ui::state();
-    if (ui::settings::save(state.pins)) Serial.println("Settings saved to flash");
+    if (ui::settings::save(state.values)) Serial.println("Settings saved to flash");
     else Serial.println("Failed to save settings");
     return;
   }
@@ -108,11 +111,68 @@ void processSerialCommand(const char* command) {
   if (strcmp(command, "apin?") == 0 || strcmp(command, "help") == 0) {
     Serial.printf("Analog input: GPIO %u, value %u\n", gActiveAnalogPin, gAnalogInputValue);
     Serial.printf("Buzzer output: GPIO %u\n", ui::buzzer::pin());
+#if defined(USE_WIFI)
+    Serial.printf("Wi-Fi: %s\n", wifiStatusText());
+    Serial.println(
+        "Commands: apin <GPIO>, bpin <GPIO>, save, beep, wifi, wifi scan, wifi ssid <name>, "
+        "wifi pass <pass>, wifi id <identity>, wifi user <username>, wifi connect, wifi save");
+#else
     Serial.println("Commands: apin <GPIO>, bpin <GPIO>, save, beep");
+#endif
     return;
   }
+#if defined(USE_WIFI)
+  if (strncmp(command, "wifi", 4) == 0 && (command[4] == '\0' || command[4] == ' ')) {
+    const char* argument = command[4] == '\0' ? command + 4 : command + 5;
+    if (command[4] == '\0') {
+      Serial.printf("Wi-Fi: %s, SSID: %s\n", wifiStatusText(), ui::state().values.wifi.ssid);
+      return;
+    }
+    if (strcmp(argument, "scan") == 0) {
+      startWifiScan();
+      Serial.println("Wi-Fi scan started");
+      return;
+    }
+    if (strcmp(argument, "connect") == 0) {
+      Serial.println(wifiConnect(ui::state().values.wifi) ? "Wi-Fi connecting"
+                                                          : "Wi-Fi needs an SSID and credentials");
+      return;
+    }
+    if (strcmp(argument, "save") == 0) {
+      Serial.println(ui::settings::save(ui::state().values) ? "Wi-Fi credentials saved"
+                                                            : "Failed to save settings");
+      return;
+    }
+    // Secret-bearing arguments are stored but never echoed back.
+    struct Field {
+      const char* name;
+      char* target;
+      size_t size;
+    };
+    ui::State& state = ui::editableState();
+    const Field fields[] = {
+        {"ssid", state.values.wifi.ssid, sizeof(state.values.wifi.ssid)},
+        {"pass", state.values.wifi.password, sizeof(state.values.wifi.password)},
+        {"id", state.values.wifi.identity, sizeof(state.values.wifi.identity)},
+        {"user", state.values.wifi.username, sizeof(state.values.wifi.username)},
+    };
+    for (const Field& field : fields) {
+      const size_t nameLength = strlen(field.name);
+      if (strncmp(argument, field.name, nameLength) != 0 || argument[nameLength] != ' ' ||
+          argument[nameLength + 1] == '\0') {
+        continue;
+      }
+      strncpy(field.target, argument + nameLength + 1, field.size - 1);
+      field.target[field.size - 1] = '\0';
+      Serial.printf("Wi-Fi %s set\n", field.name);
+      return;
+    }
+    Serial.println("Usage: wifi [scan|connect|save|ssid <name>|pass <pass>|id <identity>|user <name>]");
+    return;
+  }
+#endif
   if (command[0] != '\0') {
-    Serial.println("Unknown command. Use 'apin <GPIO>' or 'apin?'.");
+    Serial.println("Unknown command. Use 'help' for the command list.");
   }
 }
 
@@ -165,6 +225,9 @@ void setup() {
   turnLedOff();
 
   ui::begin();
+#if defined(USE_WIFI)
+  initWifi();
+#endif
   const uint32_t bootStartedMs = millis();
   for (uint8_t note = 0; note < sizeof(kBootMelodyHz) / sizeof(kBootMelodyHz[0]); ++note) {
     ui::buzzer::beep(kBootMelodyHz[note], kBootNoteMs);
@@ -176,8 +239,8 @@ void setup() {
     }
   }
   ui::buzzer::stop();
-  gRequestedAnalogPin = ui::state().pins.analogButton;
-  gActiveAnalogPin = ui::state().pins.analogButton;
+  gRequestedAnalogPin = ui::state().values.pins.analogButton;
+  gActiveAnalogPin = ui::state().values.pins.analogButton;
   pinMode(gActiveAnalogPin, INPUT);
   xTaskCreate(
       analogInputTask,
@@ -223,6 +286,9 @@ void loop() {
   // Process incoming Bluetooth data and serial configuration commands.
   updateBluetooth();
   pollSerialCommands();
+#if defined(USE_WIFI)
+  updateWifi(now);
+#endif
   ui::buzzer::update(now);
 
   // The analog-input task samples independently; decode the resistor ladder for UI input.

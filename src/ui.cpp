@@ -9,6 +9,10 @@
 #include "ui/settings.h"
 #include "ui/games.h"
 #include "bluetooth_manager.h"
+#if defined(USE_WIFI)
+#include "ui/display_internal.h"
+#include "wifi_manager.h"
+#endif
 
 namespace ui {
 
@@ -31,8 +35,14 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
       break;
     }
     case Screen::Settings:
-      settings::render(current.pins, current.settingsOption);
+      settings::render(current.values, current.settingsOption, current.settingsEditing);
       break;
+#if defined(USE_WIFI)
+    case Screen::WifiScan:
+      display::wifiScan(current.wifiSelectedNetwork, wifiScanResults(), wifiScanCount(),
+                        wifiScanRunning());
+      break;
+#endif
     case Screen::DinoGame:
     case Screen::FlappyBird:
       games::render(current.screen);
@@ -41,6 +51,10 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
       if (isNavigationActive()) navigation::render(getNavigationData(), current.speedFocused);
       else navigation::renderStatus(status, message, speed, cycle);
       break;
+#if !defined(USE_WIFI)
+    case Screen::WifiScan:
+      break;
+#endif
   }
 }
 

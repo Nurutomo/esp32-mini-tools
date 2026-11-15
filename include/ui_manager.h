@@ -20,6 +20,7 @@ enum class Screen : uint8_t {
   About,
   BluetoothInfo,
   Settings,
+  WifiScan,
   DinoGame,
   FlappyBird,
 };
@@ -30,7 +31,9 @@ struct State {
   uint8_t selectedItem = 0;
   uint8_t selectedBluetoothDevice = 0;
   uint8_t settingsOption = 0;
-  settings::Pins pins{settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin};
+  bool settingsEditing = false;
+  uint8_t wifiSelectedNetwork = 0;
+  settings::Values values;
 };
 
 void begin();
@@ -38,5 +41,7 @@ void update(uint16_t analogValue, uint32_t now);
 void setAnalogButtonPin(uint8_t pin);
 void setBuzzerPin(uint8_t pin);
 const State& state();
+// Serial configuration writes through this reference before `save`.
+State& editableState();
 
 }  // namespace ui
