@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
@@ -58,6 +59,9 @@ class BluetoothController(private val context: Context) {
     private val sendMutex = kotlinx.coroutines.sync.Mutex()
     private var connectJob: Job? = null
     private var connectionTimeoutJob: Job? = null
+    // Bumped on every teardown so a failed send from an old session cannot
+    // disconnect the session that replaced it.
+    @Volatile private var connectionId = 0
 
     // Classic BT variables
     private var classicSocket: BluetoothSocket? = null
@@ -163,10 +167,16 @@ class BluetoothController(private val context: Context) {
     private fun startClassicReadLoop() {
         readJob = scope.launch {
             val buffer = ByteArray(1024)
+            val socket = classicSocket ?: return@launch
             val stream = classicInputStream ?: return@launch
-            while (isConnected() && classicSocket?.isConnected == true) {
+            while (isConnected() && classicSocket === socket) {
                 try {
                     val bytes = stream.read(buffer)
+                    if (bytes < 0) {
+                        // EOF: peer closed. Only tear down if this is still the live session.
+                        if (classicSocket === socket) disconnect()
+                        break
+                    }
                     if (bytes > 0) {
                         val text = String(buffer, 0, bytes)
                         withContext(Dispatchers.Main) {
@@ -174,7 +184,7 @@ class BluetoothController(private val context: Context) {
                         }
                     }
                 } catch (e: Exception) {
-                    if (state == ConnectionState.CONNECTED) {
+                    if (classicSocket === socket && state == ConnectionState.CONNECTED) {
                         Timber.w("Classic read loop broken: ${e.message}")
                         disconnect()
                     }
@@ -197,6 +207,7 @@ class BluetoothController(private val context: Context) {
     private val bleCallbacks = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Timber.d("BLE onConnectionStateChange status=$status newState=$newState")
+            if (gatt !== bleGatt) return // Ignore callbacks from a closed/replaced connection.
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 // Larger MTU keeps a full navigation frame in one characteristic write.
                 gatt.requestMtu(517)
@@ -207,12 +218,14 @@ class BluetoothController(private val context: Context) {
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (gatt !== bleGatt) return
             Timber.d("BLE onMtuChanged mtu=$mtu status=$status")
             negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
             gatt.discoverServices()
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (gatt !== bleGatt) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val nusService = gatt.getService(NUS_SERVICE_UUID)
                 if (nusService != null) {
@@ -253,6 +266,7 @@ class BluetoothController(private val context: Context) {
             return
         }
 
+        val session = connectionId
         scope.launch {
             try {
                 if (isBleMode && bleGatt != null && bleRxChar != null) {
@@ -266,7 +280,7 @@ class BluetoothController(private val context: Context) {
             } catch (e: Exception) {
                 Timber.e("Failed to send data: ${e.message}")
                 com.esp32.googlemaps.util.DebugLogger.log("BT_ERR", "Send error: ${e.message}", com.esp32.googlemaps.util.DebugLogger.Level.ERROR)
-                disconnect()
+                if (connectionId == session) disconnect()
             }
         }
     }
@@ -280,13 +294,20 @@ class BluetoothController(private val context: Context) {
         var offset = 0
 
         while (offset < data.size) {
+            // Abort if the connection was replaced or torn down mid-frame; sending
+            // the rest would land on a dead GATT and leave a truncated frame.
+            if (bleGatt !== gatt || state != ConnectionState.CONNECTED) {
+                throw IOException("BLE disconnected mid-transmission")
+            }
             val length = (data.size - offset).coerceAtMost(chunkSize)
             val chunk = ByteArray(length)
             System.arraycopy(data, offset, chunk, 0, length)
 
             rx.value = chunk
             rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            gatt.writeCharacteristic(rx)
+            if (!gatt.writeCharacteristic(rx)) {
+                throw IOException("BLE write rejected at offset $offset")
+            }
 
             offset += length
             if (offset < data.size) {
@@ -296,6 +317,7 @@ class BluetoothController(private val context: Context) {
     }
 
     fun disconnect() {
+        connectionId++
         connectJob?.cancel()
         connectionTimeoutJob?.cancel()
         readJob?.cancel()

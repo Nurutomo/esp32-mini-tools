@@ -42,6 +42,14 @@ uint8_t gRxBuf[kRxCapacity];
 size_t gRxLen = 0;
 uint32_t gLastRxMs = 0;
 
+// Drop any partially received frame. A disconnect mid-frame must not let the
+// next connection's first bytes complete the previous connection's frame.
+void resetRxBuffer() {
+  portENTER_CRITICAL(&gBtMux);
+  gRxLen = 0;
+  portEXIT_CRITICAL(&gBtMux);
+}
+
 void appendRxBytes(const uint8_t* data, size_t len) {
   if (data == nullptr || len == 0) return;
   portENTER_CRITICAL(&gBtMux);
@@ -74,6 +82,7 @@ void sppCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* /* param */) {
     gClassicSerial.print("ESP32-OLED Ready!\r\n");
   } else if (event == ESP_SPP_CLOSE_EVT) {
     gConnected = false;
+    resetRxBuffer();
     if (Serial.availableForWrite() > 0) {
       Serial.println("[BT Classic] Client disconnected.");
     }
@@ -102,6 +111,7 @@ class ServerCallbacks final : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer* /* server */, NimBLEConnInfo& /* connInfo */, int reason) override {
     gConnected = false;
+    resetRxBuffer();
     if (Serial.availableForWrite() > 0) {
       Serial.printf("[BLE] Client disconnected (0x%02X). Restarting advertising...\n", reason);
     }
