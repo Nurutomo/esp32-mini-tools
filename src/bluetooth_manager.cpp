@@ -1,4 +1,5 @@
 #include "bluetooth_manager.h"
+#include "navigation_state.h"
 #include <string.h>
 #include <string>
 
@@ -23,8 +24,6 @@ constexpr char kLegacyCharUuid[]    = "8b5d0002-6e8f-4c2a-9b73-6d414c454001";
 BluetoothSerial gClassicSerial;
 #else
 NimBLECharacteristic* gpTxCharacteristic = nullptr;
-static std::string gBleRxAccumulator = "";
-static uint32_t gLastBleRxMs = 0;
 NimBLEScan* gpScanner = nullptr;
 BluetoothDeviceInfo gNearbyDevices[kMaxNearbyBluetoothDevices]{};
 uint8_t gNearbyDeviceCount = 0;
@@ -34,6 +33,26 @@ portMUX_TYPE gBtMux = portMUX_INITIALIZER_UNLOCKED;
 char gLastMessage[kMaxBtMessageBytes + 1] = "Ready";
 volatile bool gConnected = false;
 PacketReceivedCallback gpPacketCallback = nullptr;
+
+// Shared receive buffer for both transports. BLE writes land here from the
+// NimBLE host task, so every access is guarded by gBtMux.
+constexpr size_t kRxCapacity = kMaxPacketBytes * 2;
+uint8_t gRxBuf[kRxCapacity];
+size_t gRxLen = 0;
+uint32_t gLastRxMs = 0;
+
+void appendRxBytes(const uint8_t* data, size_t len) {
+  if (data == nullptr || len == 0) return;
+  portENTER_CRITICAL(&gBtMux);
+  if (gRxLen > 0 && (millis() - gLastRxMs > 500)) gRxLen = 0;
+  gLastRxMs = millis();
+  const size_t room = kRxCapacity - gRxLen;
+  const size_t count = len < room ? len : room;
+  if (count < len) gRxLen = 0;  // overflow: drop the partial frame
+  memcpy(gRxBuf + gRxLen, data, count);
+  gRxLen += count;
+  portEXIT_CRITICAL(&gBtMux);
+}
 
 void dispatchPacket(const char* packet, size_t len) {
   if (gpPacketCallback != nullptr) {
@@ -92,19 +111,7 @@ class ServerCallbacks final : public NimBLEServerCallbacks {
 };
 
 void handleBleRxBytes(const uint8_t* data, size_t len) {
-  if (len == 0 || data == nullptr) return;
-  const uint32_t now = millis();
-
-  portENTER_CRITICAL(&gBtMux);
-  if (!gBleRxAccumulator.empty() && (now - gLastBleRxMs > 500)) {
-    gBleRxAccumulator.clear();
-  }
-  gLastBleRxMs = now;
-  gBleRxAccumulator.append(reinterpret_cast<const char*>(data), len);
-  if (gBleRxAccumulator.size() > kMaxPacketBytes * 2) {
-    gBleRxAccumulator.clear();
-  }
-  portEXIT_CRITICAL(&gBtMux);
+  appendRxBytes(data, len);
 }
 
 class TextCallbacks final : public NimBLECharacteristicCallbacks {
@@ -173,67 +180,75 @@ void initBluetooth(const char* deviceName, PacketReceivedCallback onPacket) {
 }
 
 void updateBluetooth() {
-  const uint32_t now = millis();
-
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
-  static char rxBuf[kMaxPacketBytes + 1];
-  static size_t rxLen = 0;
-  static uint32_t lastByteMs = 0;
-
-  while (gClassicSerial.available()) {
-    char c = (char)gClassicSerial.read();
-    lastByteMs = now;
-    if (c == '\r' || c == '\n') {
-      if (rxLen > 0) {
-        rxBuf[rxLen] = '\0';
-        dispatchPacket(rxBuf, rxLen);
-        gClassicSerial.print("OK\r\n");
-        rxLen = 0;
-      }
-    } else if (rxLen < kMaxPacketBytes) {
-      rxBuf[rxLen++] = c;
-    }
+  uint8_t incoming[128];
+  size_t count = 0;
+  while (gClassicSerial.available() && count < sizeof(incoming)) {
+    const int value = gClassicSerial.read();
+    if (value >= 0) incoming[count++] = static_cast<uint8_t>(value);
   }
+  if (count > 0) appendRxBytes(incoming, count);
+#endif
 
-  // Handle line without newline (flush after 150ms idle)
-  if (rxLen > 0 && (now - lastByteMs >= 150)) {
-    rxBuf[rxLen] = '\0';
-    dispatchPacket(rxBuf, rxLen);
-    gClassicSerial.print("OK\r\n");
-    rxLen = 0;
-  }
-#else
   for (;;) {
-    std::string packet;
-    bool hasPacket = false;
+    uint8_t packet[kMaxPacketBytes + 1];
+    size_t packetLen = 0;
+    bool binary = false;
+    const uint32_t now = millis();
 
     portENTER_CRITICAL(&gBtMux);
-    size_t nlPos = gBleRxAccumulator.find('\n');
-    if (nlPos != std::string::npos) {
-      packet = gBleRxAccumulator.substr(0, nlPos);
-      gBleRxAccumulator.erase(0, nlPos + 1);
-      hasPacket = true;
-    } else if (!gBleRxAccumulator.empty() && (now - gLastBleRxMs >= 150)) {
-      packet = gBleRxAccumulator;
-      gBleRxAccumulator.clear();
-      hasPacket = true;
+    if (gRxLen >= 2 && gRxBuf[0] == kNavBinMagic0 && gRxBuf[1] == kNavBinMagic1) {
+      if (gRxLen >= kNavBinHeaderSize) {
+        const size_t payloadLen = static_cast<size_t>(gRxBuf[3]) |
+                                  (static_cast<size_t>(gRxBuf[4]) << 8);
+        const size_t frameLen = kNavBinHeaderSize + payloadLen;
+        if ((gRxBuf[2] != kNavBinTypeNav && gRxBuf[2] != kNavBinTypeHuffman) ||
+            payloadLen > kNavBinMaxPayload) {
+          memmove(gRxBuf, gRxBuf + 1, --gRxLen);
+        } else if (gRxLen >= frameLen) {
+          packetLen = frameLen;
+          memcpy(packet, gRxBuf, packetLen);
+          memmove(gRxBuf, gRxBuf + packetLen, gRxLen - packetLen);
+          gRxLen -= packetLen;
+          binary = true;
+        }
+      }
+    } else if (gRxLen > 0) {
+      size_t start = 0;
+      while (start < gRxLen && (gRxBuf[start] == '\r' || gRxBuf[start] == '\n' || gRxBuf[start] == ' ')) ++start;
+      size_t newline = start;
+      while (newline < gRxLen && gRxBuf[newline] != '\n') ++newline;
+      if (newline < gRxLen) {
+        packetLen = newline - start;
+        if (packetLen > kMaxPacketBytes) packetLen = 0;
+        if (packetLen > 0) memcpy(packet, gRxBuf + start, packetLen);
+        const size_t consumed = newline + 1;
+        memmove(gRxBuf, gRxBuf + consumed, gRxLen - consumed);
+        gRxLen -= consumed;
+      } else if (now - gLastRxMs >= 150) {
+        packetLen = gRxLen - start;
+        if (packetLen > kMaxPacketBytes) packetLen = 0;
+        if (packetLen > 0) memcpy(packet, gRxBuf + start, packetLen);
+        gRxLen = 0;
+      }
     }
     portEXIT_CRITICAL(&gBtMux);
 
-    if (!hasPacket) break;
-
-    while (!packet.empty() && (packet.back() == '\r' || packet.back() == '\n' || packet.back() == ' ')) {
-      packet.pop_back();
+    if (packetLen == 0) break;
+    if (binary) {
+      dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
+      continue;
     }
-    while (!packet.empty() && (packet.front() == '\r' || packet.front() == '\n' || packet.front() == ' ')) {
-      packet.erase(0, 1);
-    }
-    if (!packet.empty()) {
-      dispatchPacket(packet.c_str(), packet.size());
-      sendBluetoothResponse("OK\r\n");
-    }
-  }
+    while (packetLen > 0 && (packet[packetLen - 1] == '\r' || packet[packetLen - 1] == ' ')) --packetLen;
+    packet[packetLen] = '\0';
+    if (packetLen == 0) continue;
+    dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+    gClassicSerial.print("OK\r\n");
+#else
+    sendBluetoothResponse("OK\r\n");
 #endif
+  }
 }
 
 void startBluetoothScan() {

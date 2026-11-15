@@ -217,9 +217,6 @@ class MainActivity : AppCompatActivity() {
             PermissionHelper.rebindNotificationListener(this)
         }
 
-        // Start foreground service if not already active
-        startNavigationService()
-
         // Handle Termux / CLI intent actions if launched via `am start`
         handleIntent(intent)
     }
@@ -252,6 +249,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         updatePermissionBadges()
         updateListenerStatusBadge()
+        if (PermissionHelper.hasBluetoothPermissions(this)) startNavigationService()
         DebugLogger.addListener(debugLogListener)
 
         val filter = IntentFilter().apply {
@@ -690,7 +688,7 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, NavigationBroadcastService::class.java).apply {
             action = NavigationBroadcastService.ACTION_START
         }
-        startService(intent)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun connectToSelectedDevice() {
@@ -724,14 +722,14 @@ class MainActivity : AppCompatActivity() {
             putExtra(NavigationBroadcastService.EXTRA_ADDRESS, address)
             putExtra(NavigationBroadcastService.EXTRA_FORCE_BLE, selectedDeviceIsBle)
         }
-        startService(intent)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun disconnectDevice() {
         val intent = Intent(this, NavigationBroadcastService::class.java).apply {
             action = NavigationBroadcastService.ACTION_DISCONNECT
         }
-        startService(intent)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     private fun updateConnectionStateUi(state: BluetoothController.ConnectionState, deviceName: String?) {

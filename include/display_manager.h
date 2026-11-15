@@ -19,7 +19,7 @@ uint8_t getDisplayAddress();
 void updateDisplay(const char* statusText, const char* btMessage, uint32_t cycle);
 
 // Direct render methods
-void renderNavHud(const NavigationData& nav);
+void renderNavHud(const NavigationData& nav, bool speedFocused = false);
 void renderStatusScreen(const char* statusText, const char* btMessage, int speed, uint32_t cycle);
 
 // Backlight and invert effects

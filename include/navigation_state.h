@@ -9,6 +9,24 @@ constexpr size_t kIconHeight = 32;
 constexpr size_t kIconBufferSize = (kIconWidth * kIconHeight) / 8; // 128 bytes
 constexpr uint32_t kNavTimeoutDefaultMs = 15000; // 15s without update falls back to status
 
+// Compact binary frame: [0xAA 0x55][type][payload len LE16][payload]
+// type 0x01 = raw navigation payload, type 0x02 = canonical Huffman encoded
+// ([uncompressed len LE16][bitstream]) whose decoded bytes are a type 0x01 payload.
+constexpr uint8_t kNavBinMagic0 = 0xAA;
+constexpr uint8_t kNavBinMagic1 = 0x55;
+constexpr uint8_t kNavBinTypeNav = 0x01;
+constexpr uint8_t kNavBinTypeHuffman = 0x02;
+// Payload flag: icon bytes are row-differenced (each row XOR the row above).
+// Monochrome maneuver icons are mostly empty rows, so this makes the bitmap
+// compress about 40% better through the shared Huffman codebook.
+constexpr uint8_t kNavBinFlagIconRowDiff = 0x08;
+constexpr size_t kNavBinHeaderSize = 5;
+// Raw payload ceiling; the Huffman path can exceed it on incompressible input.
+constexpr size_t kNavBinMaxContent = 512;
+// Wire payload ceiling: must keep kNavBinHeaderSize + payload within the
+// Bluetooth manager's kMaxPacketBytes (1024) frame buffer.
+constexpr size_t kNavBinMaxPayload = 1019;
+
 struct NavigationData {
   bool active = false;
   uint32_t lastUpdateMs = 0;
@@ -33,6 +51,9 @@ NavigationData& getNavigationData();
 
 // Parse incoming JSON payload (returns true if valid navigation/speed JSON)
 bool processNavigationJson(const char* payload, size_t len);
+
+// Parse incoming compact binary navigation frame (returns true if valid)
+bool processNavigationBinary(const uint8_t* payload, size_t len);
 
 // Check if navigation data is currently active and fresh
 bool isNavigationActive(uint32_t timeoutMs = kNavTimeoutDefaultMs);

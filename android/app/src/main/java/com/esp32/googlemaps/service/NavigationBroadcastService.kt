@@ -18,14 +18,13 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.esp32.googlemaps.MainActivity
 import com.esp32.googlemaps.R
 import com.esp32.googlemaps.bluetooth.BluetoothController
-import com.esp32.googlemaps.model.DevicePreferences
-import com.esp32.googlemaps.model.Esp32Message
-import com.esp32.googlemaps.model.NavigationPayload
 import com.esp32.googlemaps.model.NavigationState
+import com.esp32.googlemaps.util.NavigationBinaryProtocol
 import com.esp32.googlemaps.util.PermissionHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,8 +32,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import timber.log.Timber
 import java.util.TimeZone
 import kotlin.math.roundToInt
@@ -58,12 +55,15 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
 
     private var currentNavState: NavigationState = NavigationState()
     private var currentGpsSpeed: Int = 0
+    private var foregroundStarted = false
 
     companion object {
+        private const val PREFS = "esp32_maps_prefs"
         const val NOTIFICATION_ID = 2001
         const val CHANNEL_ID = "esp32_navigation_channel"
 
         const val ACTION_START = "ACTION_START"
+        const val ACTION_BACKGROUND_START = "ACTION_BACKGROUND_START"
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_CONNECT = "ACTION_CONNECT"
         const val ACTION_DISCONNECT = "ACTION_DISCONNECT"
@@ -79,9 +79,29 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         const val EXTRA_SPEED = "speed"
 
         private var instance: NavigationBroadcastService? = null
+        @Volatile private var pendingState: NavigationState? = null
 
         fun updateNavigation(context: Context, state: NavigationState) {
-            instance?.handleNavigationUpdate(state)
+            val service = instance
+            if (service != null) {
+                service.handleNavigationUpdate(state)
+                return
+            }
+            // Service killed while the phone sat idle: remember the update and
+            // bring the foreground service back so navigation keeps streaming.
+            pendingState = state
+            try {
+                ContextCompat.startForegroundService(
+                    context.applicationContext,
+                    Intent(context.applicationContext, NavigationBroadcastService::class.java).apply {
+                        action = ACTION_BACKGROUND_START
+                    }
+                )
+            } catch (e: Exception) {
+                // Android 12+ may refuse a background FGS start; the update plays
+                // out on the next successful start.
+                Timber.w("Background service restart refused: ${e.message}")
+            }
         }
 
         fun sendTestPayload(context: Context, state: NavigationState) {
@@ -105,23 +125,23 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every command arrives via startForegroundService(), so the service
+        // must post its notification or Android kills it.
+        if (!foregroundStarted) startForegroundServiceCompat()
         when (intent?.action) {
-            ACTION_START -> {
-                startForegroundServiceCompat()
+            ACTION_START, ACTION_BACKGROUND_START, null -> {
                 startLocationUpdates()
                 startPeriodicPing()
-                if (reconnectAddress == null) {
-                    val prefs = getSharedPreferences("esp32_maps_prefs", Context.MODE_PRIVATE)
-                    val savedAddress = prefs.getString("last_address", null)
-                    if (!savedAddress.isNullOrEmpty()) {
-                        reconnectAddress = savedAddress
-                        reconnectForceBle = prefs.getBoolean("last_is_ble", false)
-                        startAutoReconnect()
-                    }
+                restoreSavedDevice()
+                if (reconnectAddress != null) startAutoReconnect()
+                pendingState?.let {
+                    pendingState = null
+                    handleNavigationUpdate(it)
                 }
             }
             ACTION_STOP -> {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                foregroundStarted = false
                 stopLocationUpdates()
                 stopPeriodicPing()
                 stopAutoReconnect()
@@ -134,6 +154,10 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 if (!address.isNullOrEmpty()) {
                     reconnectAddress = address
                     reconnectForceBle = forceBle
+                    getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                        .putString("last_address", address)
+                        .putBoolean("last_is_ble", forceBle)
+                        .apply()
                     bluetoothController.connect(address, forceBle)
                     startAutoReconnect()
                 }
@@ -143,21 +167,36 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 bluetoothController.disconnect()
             }
         }
-        return START_STICKY
+        // START_STICKY: Android restarts us after a kill with a null intent,
+        // which the null branch above treats as a normal background start.
+        return if (intent?.action == ACTION_STOP) START_NOT_STICKY else START_STICKY
+    }
+
+    private fun restoreSavedDevice() {
+        if (reconnectAddress != null) return
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val savedAddress = prefs.getString("last_address", null)
+        if (!savedAddress.isNullOrEmpty()) {
+            reconnectAddress = savedAddress
+            reconnectForceBle = prefs.getBoolean("last_is_ble", false)
+        }
     }
 
     private fun startForegroundServiceCompat() {
+        if (foregroundStarted) return
         val notification = buildForegroundNotification("Waiting for navigation data...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            // Declaring `location` without the runtime permission throws, and
+            // Android 14 refuses a location FGS started from BOOT_COMPLETED.
+            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            if (PermissionHelper.hasLocationPermissions(this)) {
+                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
             startForeground(NOTIFICATION_ID, notification, serviceType)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        foregroundStarted = true
     }
 
     private fun buildForegroundNotification(contentText: String): Notification {
@@ -230,7 +269,7 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
 
         // Send speed update if connected and not currently navigating (speedometer mode)
         if (bluetoothController.isConnected() && !currentNavState.isNavigating) {
-            sendJsonPayload()
+            sendNavigationFrame()
         }
     }
 
@@ -239,17 +278,23 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
             Timber.w("Cannot send selected icon: Bluetooth is disconnected")
             return
         }
-        val message = Esp32Message(
-            navigation = NavigationPayload(
+        bluetoothController.sendBytes(
+            NavigationBinaryProtocol.encode(
+                navigating = true,
                 nextRoad = iconLabel,
-                iconBase64 = iconBase64
-            ),
-            speed = currentGpsSpeed,
-            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
-            epochSeconds = System.currentTimeMillis() / 1000L,
-            tzOffsetSeconds = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
+                nextRoadSub = null,
+                turnDistance = null,
+                eta = null,
+                ete = null,
+                totalDistance = null,
+                iconBase64 = iconBase64,
+                speed = currentGpsSpeed,
+                speedLimit = 60,
+                displayBacklight = false,
+                epochSeconds = System.currentTimeMillis() / 1000L,
+                tzOffsetSeconds = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
+            )
         )
-        bluetoothController.send(Json.encodeToString(message))
     }
 
     fun handleNavigationUpdate(state: NavigationState) {
@@ -265,39 +310,35 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildForegroundNotification(statusText))
 
-        sendJsonPayload()
+        sendNavigationFrame()
     }
 
-    private fun sendJsonPayload() {
+    private fun sendNavigationFrame() {
         if (!bluetoothController.isConnected()) return
 
-        val navPayload = if (currentNavState.isNavigating) {
-            NavigationPayload(
-                nextRoad = currentNavState.nextRoad.ifEmpty { null },
-                nextRoadSub = currentNavState.nextRoadSub.ifEmpty { null },
-                nextRoadDistance = currentNavState.distanceToTurn.ifEmpty { null },
-                eta = currentNavState.eta.ifEmpty { null },
-                ete = currentNavState.ete.ifEmpty { null },
-                distance = currentNavState.totalDistance.ifEmpty { null },
-                iconBase64 = currentNavState.iconBase64.ifEmpty { null }
-            )
-        } else null
-
-        val message = Esp32Message(
-            navigation = navPayload,
+        val navigating = currentNavState.isNavigating
+        val frame = NavigationBinaryProtocol.encode(
+            navigating = navigating,
+            nextRoad = if (navigating) currentNavState.nextRoad.ifEmpty { null } else null,
+            nextRoadSub = if (navigating) currentNavState.nextRoadSub.ifEmpty { null } else null,
+            turnDistance = if (navigating) currentNavState.distanceToTurn.ifEmpty { null } else null,
+            eta = if (navigating) currentNavState.eta.ifEmpty { null } else null,
+            ete = if (navigating) currentNavState.ete.ifEmpty { null } else null,
+            totalDistance = if (navigating) currentNavState.totalDistance.ifEmpty { null } else null,
+            iconBase64 = if (navigating) currentNavState.iconBase64.ifEmpty { null } else null,
             speed = currentGpsSpeed,
-            preferences = DevicePreferences(displayBacklight = false, speedLimit = 60),
+            speedLimit = 60,
+            displayBacklight = false,
             epochSeconds = System.currentTimeMillis() / 1000L,
             tzOffsetSeconds = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
         )
 
-        val jsonString = Json.encodeToString(message)
         com.esp32.googlemaps.util.DebugLogger.log(
             "DISPATCH",
-            "Streaming to ESP32: nav=${currentNavState.isNavigating} road='${currentNavState.nextRoad}' dist='${currentNavState.distanceToTurn}' speed=$currentGpsSpeed km/h",
+            "Streaming binary frame (${frame.size} B): nav=$navigating road='${currentNavState.nextRoad}' dist='${currentNavState.distanceToTurn}' speed=$currentGpsSpeed km/h",
             com.esp32.googlemaps.util.DebugLogger.Level.BT
         )
-        bluetoothController.send(jsonString)
+        bluetoothController.sendBytes(frame)
     }
 
     private fun startPeriodicPing() {
@@ -307,7 +348,7 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 delay(8000)
                 if (bluetoothController.isConnected()) {
                     // Send heartbeat so ESP32 screen stays refreshed
-                    sendJsonPayload()
+                    sendNavigationFrame()
                 }
             }
         }
@@ -330,13 +371,16 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
                 }
                 delay(retryDelayMs)
                 when (bluetoothController.state) {
+                    BluetoothController.ConnectionState.CONNECTED -> retryDelayMs = 2_000L
+                    // Still negotiating; the controller watchdog resets it if it hangs.
+                    BluetoothController.ConnectionState.CONNECTING -> Unit
                     BluetoothController.ConnectionState.DISCONNECTED -> {
+                        // Radio off: a connect would fail instantly and spin, so wait.
+                        if (!PermissionHelper.isBluetoothEnabled(this@NavigationBroadcastService)) continue
                         Timber.i("Bluetooth disconnected; retrying saved device connection")
                         bluetoothController.connect(address, reconnectForceBle)
                         retryDelayMs = (retryDelayMs * 2).coerceAtMost(30_000L)
                     }
-                    BluetoothController.ConnectionState.CONNECTED -> retryDelayMs = 2_000L
-                    BluetoothController.ConnectionState.CONNECTING -> Unit
                 }
             }
         }
@@ -358,7 +402,7 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
         )
 
         if (state == BluetoothController.ConnectionState.CONNECTED) {
-            sendJsonPayload()
+            sendNavigationFrame()
         }
     }
 
@@ -372,6 +416,8 @@ class NavigationBroadcastService : Service(), LocationListener, BluetoothControl
 
     override fun onDestroy() {
         super.onDestroy()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        foregroundStarted = false
         instance = null
         stopLocationUpdates()
         stopPeriodicPing()

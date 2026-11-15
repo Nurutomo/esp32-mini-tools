@@ -136,7 +136,9 @@ void pollSerialCommands() {
 void onBluetoothPacket(const char* packet, size_t len) {
   const bool wasNavigationActive = isNavigationActive();
   const bool wasNewTurn = getNavigationData().newTurnManeuver;
-  if (processNavigationJson(packet, len)) {
+  const bool recognized = processNavigationBinary(reinterpret_cast<const uint8_t*>(packet), len) ||
+                          processNavigationJson(packet, len);
+  if (recognized) {
     const NavigationData& nav = getNavigationData();
     if (nav.active && (!wasNavigationActive || (!wasNewTurn && nav.newTurnManeuver))) {
       ui::buzzer::beep(330, 180);

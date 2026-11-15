@@ -21,7 +21,7 @@ bool gButtonTwoLongHandled = false;
 void select() {
   buzzer::beep(2200, 35);
   if (gState.screen == Screen::Settings) {
-    if (gState.settingsOption == 0) gState.settingsOption = 1;
+    if (gState.settingsOption < 2) ++gState.settingsOption;
     else {
       if (!settings::save(gState.pins)) buzzer::beep(500, 250);
       gState.screen = Screen::Menu;
@@ -62,6 +62,7 @@ void begin() {
   gState = State{};
   settings::load(gState.pins, settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin);
   buzzer::begin(gState.pins.buzzer);
+  buzzer::setEnabled(gState.pins.buzzerEnabled);
   gLastActionMs = 0;
   gButtonTwoDownMs = 0;
   gPreviousButton = Button::None;
@@ -101,11 +102,17 @@ void update(uint16_t analogValue, uint32_t now) {
     } else if (gState.screen == Screen::Settings && button == Button::One) {
       settings::edit(gState.pins, gState.settingsOption, 1, 21);
       buzzer::setPin(gState.pins.buzzer);
+      buzzer::setEnabled(gState.pins.buzzerEnabled);
       gLastActionMs = now;
     } else if (gState.screen == Screen::Settings && button == Button::Three) {
-      if (gState.settingsOption == 0) gState.settingsOption = 1;
-      else settings::edit(gState.pins, gState.settingsOption, -1, 21);
+      settings::edit(gState.pins, gState.settingsOption, -1, 21);
       buzzer::setPin(gState.pins.buzzer);
+      buzzer::setEnabled(gState.pins.buzzerEnabled);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::Navigation &&
+               (button == Button::One || button == Button::Three)) {
+      gState.speedFocused = !gState.speedFocused;
+      buzzer::beep(1800, 25);
       gLastActionMs = now;
     } else if (gState.screen == Screen::BluetoothInfo &&
                (button == Button::One || button == Button::Three)) {

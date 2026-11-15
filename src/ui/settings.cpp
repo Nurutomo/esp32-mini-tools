@@ -11,6 +11,7 @@ void load(Pins& pins, uint8_t defaultAnalogButton, uint8_t defaultBuzzer) {
   if (!prefs.begin("esp32ui", true)) return;
   pins.analogButton = prefs.getUChar("apin", defaultAnalogButton);
   pins.buzzer = prefs.getUChar("bpin", defaultBuzzer);
+  pins.buzzerEnabled = prefs.getBool("ben", false);
   prefs.end();
 }
 
@@ -36,7 +37,8 @@ bool save(const Pins& pins) {
   Preferences prefs;
   if (!prefs.begin("esp32ui", false)) return false;
   const bool ok = prefs.putUChar("apin", pins.analogButton) == 1 &&
-                  prefs.putUChar("bpin", pins.buzzer) == 1;
+                  prefs.putUChar("bpin", pins.buzzer) == 1 &&
+                  prefs.putBool("ben", pins.buzzerEnabled) == 1;
   prefs.end();
   return ok;
 }
@@ -46,6 +48,10 @@ void render(const Pins& pins, uint8_t selectedOption) {
 }
 
 void edit(Pins& pins, uint8_t selectedOption, int8_t direction, uint8_t maxGpio) {
+  if (selectedOption == 2) {
+    pins.buzzerEnabled = direction > 0;
+    return;
+  }
   uint8_t& pin = selectedOption == 0 ? pins.analogButton : pins.buzzer;
   const int16_t next = static_cast<int16_t>(pin) + direction;
   if (next < 0 || next > maxGpio) return;

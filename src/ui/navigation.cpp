@@ -5,8 +5,8 @@
 namespace ui {
 namespace navigation {
 
-void render(const NavigationData& nav) {
-  renderNavHud(nav);
+void render(const NavigationData& nav, bool speedFocused) {
+  renderNavHud(nav, speedFocused);
 }
 
 void renderStatus(const char* statusText, const char* message, int speed, uint32_t cycle) {

@@ -226,7 +226,7 @@ static void handleFlashEffect() {
   }
 }
 
-void renderNavHud(const NavigationData& nav) {
+void renderNavHud(const NavigationData& nav, bool speedFocused) {
   if (!gDisplayReady) return;
   prepareForI2C();
 
@@ -254,40 +254,64 @@ void renderNavHud(const NavigationData& nav) {
   gDisplay.drawFastVLine(34, 2, 28, SSD1306_WHITE);
 
   // Turn distance remains blank in cruise mode; never substitute route distance here.
-  if (nav.distance[0] != '\0') {
-    const uint8_t distanceSize = 2;
-    gDisplay.setTextSize(distanceSize);
-    gDisplay.setCursor(kTextX, 5);
-    gDisplay.print(nav.distance);
-  }
+  if (!speedFocused) {
+    if (nav.distance[0] != '\0') {
+      gDisplay.setTextSize(2);
+      gDisplay.setCursor(kTextX, 5);
+      gDisplay.print(nav.distance);
+    }
 
-  // Clock and date below the distance label: "DD/MM HH:MM" at text size 1.
-  // Shown as soon as the phone sends the first time sync; kept up by millis() drift tracking.
-  gDisplay.setTextSize(1);
-  if (isClockSynced()) {
-    char timeStr[6], dateStr[6];
-    getClockTimeStr(timeStr, sizeof(timeStr));
-    getClockDateStr(dateStr, sizeof(dateStr));
-    char clockLine[12];
-    snprintf(clockLine, sizeof(clockLine), "%s %s", dateStr, timeStr);
-    gDisplay.setCursor(kTextX, 23);
-    gDisplay.print(clockLine);
-  }
+    gDisplay.setTextSize(1);
+    if (isClockSynced()) {
+      char timeStr[6], dateStr[6];
+      getClockTimeStr(timeStr, sizeof(timeStr));
+      getClockDateStr(dateStr, sizeof(dateStr));
+      char clockLine[12];
+      snprintf(clockLine, sizeof(clockLine), "%s %s", dateStr, timeStr);
+      gDisplay.setCursor(kTextX, 23);
+      gDisplay.print(clockLine);
+    }
 
-  // Speed badge is right aligned and gets reserved space so it cannot overlap distance.
-  gDisplay.setTextSize(1);
-  if (nav.speed >= 0) {
-    char speedText[8];
-    snprintf(speedText, sizeof(speedText), "%d", nav.speed);
-    const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 6 + 16);
-    const int16_t speedX = kSpeedRight - speedWidth;
-    gDisplay.drawRoundRect(speedX, 2, speedWidth, 26, 3, SSD1306_WHITE);
-    gDisplay.setCursor(speedX + 2, 5);
-    gDisplay.print(speedText);
-    gDisplay.setCursor(speedX + 2, 17);
-    gDisplay.print("kmh");
-    if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
-      gDisplay.drawRect(speedX - 1, 1, speedWidth + 2, 28, SSD1306_WHITE);
+    // Speed badge is right aligned and gets reserved space so it cannot overlap distance.
+    if (nav.speed >= 0) {
+      char speedText[8];
+      snprintf(speedText, sizeof(speedText), "%d", nav.speed);
+      const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 6 + 16);
+      const int16_t speedX = kSpeedRight - speedWidth;
+      gDisplay.drawRoundRect(speedX, 2, speedWidth, 26, 3, SSD1306_WHITE);
+      gDisplay.setCursor(speedX + 2, 5);
+      gDisplay.print(speedText);
+      gDisplay.setCursor(speedX + 2, 17);
+      gDisplay.print("kmh");
+      if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
+        gDisplay.drawRect(speedX - 1, 1, speedWidth + 2, 28, SSD1306_WHITE);
+      }
+    }
+  } else {
+    // Speed-focused mode: large km/h, small distance and clock.
+    if (nav.distance[0] != '\0') {
+      gDisplay.setCursor(kTextX, 25);
+      gDisplay.printf("%.8s", nav.distance);
+    }
+    if (isClockSynced()) {
+      char timeStr[6];
+      getClockTimeStr(timeStr, sizeof(timeStr));
+      gDisplay.setCursor(96, 25);
+      gDisplay.print(timeStr);
+    }
+    if (nav.speed >= 0) {
+      char speedText[8];
+      snprintf(speedText, sizeof(speedText), "%d", nav.speed);
+      gDisplay.setTextSize(2);
+      const int16_t speedWidth = static_cast<int16_t>(strlen(speedText) * 12);
+      gDisplay.setCursor(kTextX, 4);
+      gDisplay.print(speedText);
+      gDisplay.setTextSize(1);
+      gDisplay.setCursor(kTextX + speedWidth + 4, 11);
+      gDisplay.print("kmh");
+      if (nav.speedLimit > 0 && nav.speed > nav.speedLimit) {
+        gDisplay.drawRect(35, 1, OLED_WIDTH - 36, 31, SSD1306_WHITE);
+      }
     }
   }
 
@@ -391,9 +415,12 @@ void settings(const ui::settings::Pins& pins, uint8_t selectedOption) {
   gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
   gDisplay.setCursor(2, 23);
   gDisplay.printf("%c Buttons GPIO %u", selectedOption == 0 ? '>' : ' ', pins.analogButton);
-  gDisplay.setCursor(2, 37);
+  gDisplay.setCursor(2, 35);
   gDisplay.printf("%c Buzzer GPIO %u", selectedOption == 1 ? '>' : ' ', pins.buzzer);
-  gDisplay.setCursor(2, 55);
+  gDisplay.setCursor(2, 47);
+  gDisplay.printf("%c Buzzer %s", selectedOption == 2 ? '>' : ' ',
+                  pins.buzzerEnabled ? "ON" : "OFF");
+  gDisplay.setCursor(2, 58);
   gDisplay.print("1/3 Change  2 Save");
   gDisplay.display();
 }

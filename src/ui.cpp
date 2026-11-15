@@ -33,7 +33,7 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
       settings::render(current.pins, current.settingsOption);
       break;
     case Screen::Navigation:
-      if (isNavigationActive()) navigation::render(getNavigationData());
+      if (isNavigationActive()) navigation::render(getNavigationData(), current.speedFocused);
       else navigation::renderStatus(status, message, speed, cycle);
       break;
   }

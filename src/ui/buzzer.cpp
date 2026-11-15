@@ -8,6 +8,7 @@ namespace {
 uint8_t gPin = 10;
 uint32_t gStopAtMs = 0;
 bool gPlaying = false;
+bool gEnabled = false;
 
 }
 
@@ -22,8 +23,13 @@ void setPin(uint8_t pinNumber) {
   pinMode(gPin, INPUT);
 }
 
+void setEnabled(bool enabled) {
+  gEnabled = enabled;
+  if (!enabled) stop();
+}
+
 void beep(uint16_t frequencyHz, uint16_t durationMs) {
-  if (frequencyHz == 0 || durationMs == 0) return;
+  if (!gEnabled || frequencyHz == 0 || durationMs == 0) return;
   if (gPlaying) noTone(gPin);
   pinMode(gPin, OUTPUT);
   tone(gPin, frequencyHz);

@@ -11,6 +11,7 @@ constexpr uint8_t kDefaultBuzzerPin = 10;
 struct Pins {
   uint8_t analogButton;
   uint8_t buzzer;
+  bool buzzerEnabled = false;
 };
 
 void load(Pins& pins, uint8_t defaultAnalogButton, uint8_t defaultBuzzer);

@@ -54,7 +54,9 @@ class BluetoothController(private val context: Context) {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val sendMutex = kotlinx.coroutines.sync.Mutex()
     private var connectJob: Job? = null
+    private var connectionTimeoutJob: Job? = null
 
     // Classic BT variables
     private var classicSocket: BluetoothSocket? = null
@@ -88,6 +90,7 @@ class BluetoothController(private val context: Context) {
 
     fun connect(address: String, forceBle: Boolean = false) {
         val adapter = bluetoothAdapter ?: run {
+            state = ConnectionState.DISCONNECTED
             listener?.onError("Bluetooth not available on this device")
             return
         }
@@ -95,6 +98,7 @@ class BluetoothController(private val context: Context) {
         val device = try {
             adapter.getRemoteDevice(address)
         } catch (e: Exception) {
+            state = ConnectionState.DISCONNECTED
             listener?.onError("Invalid Bluetooth address: $address")
             return
         }
@@ -117,6 +121,17 @@ class BluetoothController(private val context: Context) {
                 connectBle(device)
             } else {
                 connectClassic(device)
+            }
+        }
+
+        // Watchdog: a socket that never answers leaves us stuck in CONNECTING,
+        // and the service reconnect loop would then never retry.
+        connectionTimeoutJob?.cancel()
+        connectionTimeoutJob = scope.launch {
+            delay(15_000)
+            if (state == ConnectionState.CONNECTING) {
+                Timber.w("Connect attempt timed out; resetting")
+                disconnect()
             }
         }
     }
@@ -170,66 +185,72 @@ class BluetoothController(private val context: Context) {
 
     private fun connectBle(device: BluetoothDevice) {
         isBleMode = true
-        bleGatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
-            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                Timber.d("BLE onConnectionStateChange status=$status newState=$newState")
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Timber.i("BLE Connected to GATT server, requesting MTU 512...")
-                    // Request larger MTU so JSON payloads fit in single characteristic writes
-                    gatt.requestMtu(512)
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Timber.w("BLE Disconnected")
-                    disconnect()
-                }
-            }
-
-            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-                Timber.d("BLE onMtuChanged mtu=$mtu status=$status")
-                negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
-                gatt.discoverServices()
-            }
-
-            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    val nusService = gatt.getService(NUS_SERVICE_UUID)
-                    if (nusService != null) {
-                        bleRxChar = nusService.getCharacteristic(NUS_RX_CHAR_UUID)
-                        state = ConnectionState.CONNECTED
-                        Timber.i("NUS Service discovered, BLE connected!")
-                        com.esp32.googlemaps.util.DebugLogger.log("BT", "BLE connected! MTU=$negotiatedMtu", com.esp32.googlemaps.util.DebugLogger.Level.BT)
-                    } else {
-                        Timber.e("Nordic UART Service not found on device!")
-                        com.esp32.googlemaps.util.DebugLogger.log("BT", "Nordic UART Service not found on device!", com.esp32.googlemaps.util.DebugLogger.Level.ERROR)
-                        disconnect()
-                        CoroutineScope(Dispatchers.Main).launch {
-                            listener?.onError("Nordic UART Service not found on ESP32 BLE")
-                        }
-                    }
-                } else {
-                    Timber.e("Service discovery failed with status $status")
-                    disconnect()
-                }
-            }
-
-            override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                val data = characteristic.value
-                if (data != null && data.isNotEmpty()) {
-                    val text = String(data)
-                    CoroutineScope(Dispatchers.Main).launch {
-                        listener?.onDataReceived(text)
-                    }
-                }
-            }
-        })
+        try {
+            bleGatt = device.connectGatt(context, false, bleCallbacks)
+        } catch (e: Exception) {
+            Timber.e("connectGatt failed: ${e.message}")
+            disconnect()
+        }
     }
 
-    fun send(message: String) {
-        if (!isConnected()) {
-            Timber.w("Cannot send message: Not connected")
-            return
+    private val bleCallbacks = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            Timber.d("BLE onConnectionStateChange status=$status newState=$newState")
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // Larger MTU keeps a full navigation frame in one characteristic write.
+                gatt.requestMtu(517)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Timber.w("BLE disconnected (status $status)")
+                disconnect()
+            }
         }
 
-        val data = (message.trimEnd() + "\r\n").toByteArray(Charsets.UTF_8)
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            Timber.d("BLE onMtuChanged mtu=$mtu status=$status")
+            negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
+            gatt.discoverServices()
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val nusService = gatt.getService(NUS_SERVICE_UUID)
+                if (nusService != null) {
+                    bleRxChar = nusService.getCharacteristic(NUS_RX_CHAR_UUID)
+                    state = ConnectionState.CONNECTED
+                    Timber.i("NUS Service discovered, BLE connected!")
+                    com.esp32.googlemaps.util.DebugLogger.log("BT", "BLE connected! MTU=$negotiatedMtu", com.esp32.googlemaps.util.DebugLogger.Level.BT)
+                } else {
+                    Timber.e("Nordic UART Service not found on device!")
+                    com.esp32.googlemaps.util.DebugLogger.log("BT", "Nordic UART Service not found on device!", com.esp32.googlemaps.util.DebugLogger.Level.ERROR)
+                    disconnect()
+                    CoroutineScope(Dispatchers.Main).launch {
+                        listener?.onError("Nordic UART Service not found on ESP32 BLE")
+                    }
+                }
+            } else {
+                Timber.e("Service discovery failed with status $status")
+                disconnect()
+            }
+        }
+
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            val data = characteristic.value
+            if (data != null && data.isNotEmpty()) {
+                val text = String(data)
+                CoroutineScope(Dispatchers.Main).launch {
+                    listener?.onDataReceived(text)
+                }
+            }
+        }
+    }
+
+    fun send(message: String) = sendBytes((message.trimEnd() + "\r\n").toByteArray(Charsets.UTF_8))
+
+    fun sendBytes(data: ByteArray) {
+        if (!isConnected()) {
+            Timber.w("Cannot send data: Not connected")
+            return
+        }
 
         scope.launch {
             try {
@@ -249,9 +270,9 @@ class BluetoothController(private val context: Context) {
         }
     }
 
-    private suspend fun sendBleChunks(data: ByteArray) {
-        val gatt = bleGatt ?: return
-        val rx = bleRxChar ?: return
+    private suspend fun sendBleChunks(data: ByteArray) = sendMutex.withLock {
+        val gatt = bleGatt ?: return@withLock
+        val rx = bleRxChar ?: return@withLock
 
         // Max payload per chunk = MTU - 3 bytes GATT overhead
         val chunkSize = (negotiatedMtu - 3).coerceAtLeast(20)
@@ -275,6 +296,7 @@ class BluetoothController(private val context: Context) {
 
     fun disconnect() {
         connectJob?.cancel()
+        connectionTimeoutJob?.cancel()
         readJob?.cancel()
 
         try {
