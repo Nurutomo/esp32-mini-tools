@@ -8,9 +8,9 @@
 #include "ui/navigation.h"
 #include "ui/settings.h"
 #include "ui/games.h"
+#include "ui/display_internal.h"
 #include "bluetooth_manager.h"
 #if defined(USE_WIFI)
-#include "ui/display_internal.h"
 #include "wifi_manager.h"
 #endif
 
@@ -37,6 +37,14 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
     case Screen::Settings:
       settings::render(current.values, current.settingsOption, current.settingsEditing);
       break;
+    case Screen::Keyboard: {
+      const settings::model::Entry* entry = settings::model::entryAt(current.settingsOption);
+      display::keyboard(entry != nullptr ? entry->label : "",
+                        settings::textValue(current.values, current.settingsOption),
+                        settings::textIsSecret(current.settingsOption), current.keyboardPage,
+                        current.keyboardCell);
+      break;
+    }
 #if defined(USE_WIFI)
     case Screen::WifiScan:
       display::wifiScan(current.wifiSelectedNetwork, wifiScanResults(), wifiScanCount(),

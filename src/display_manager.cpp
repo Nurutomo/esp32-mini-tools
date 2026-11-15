@@ -550,27 +550,75 @@ void settings(const ui::settings::Values& values, uint8_t selectedOption, bool e
   gDisplay.setTextColor(SSD1306_WHITE);
   gDisplay.drawFastHLine(0, 53, OLED_WIDTH, SSD1306_WHITE);
   char buffer[40];
-  const char* value = ui::settings::valueText(values, selectedOption, buffer, sizeof(buffer));
-  const char* shown = value;
-  const char* editText = editing ? ui::settings::editText(values, selectedOption) : nullptr;
-  uint8_t caret = 0;
-  if (editText != nullptr) {
-    // Show the real characters while typing a secret, otherwise it is untypeable.
-    constexpr uint8_t kWindow = 17;
-    const uint8_t position = ui::settings::textCursor(selectedOption);
-    const uint8_t start = position > kWindow ? position - kWindow : 0;
-    caret = position - start;
-    shown = editText + (start < strlen(editText) ? start : strlen(editText));
-    snprintf(buffer, sizeof(buffer), "%s", shown);
-    shown = buffer;
-  }
+  const char* shown = ui::settings::valueText(values, selectedOption, buffer, sizeof(buffer));
   gDisplay.setCursor(2, 56);
   if (editing) gDisplay.print('<');
   gDisplay.printf("%.18s", shown);
   if (editing) gDisplay.print('>');
-  if (editText != nullptr) {
-    // Caret under the character being cycled.
-    gDisplay.fillRect(9 + caret * 6, 63, 5, 1, SSD1306_WHITE);
+  presentFrame();
+}
+
+void keyboard(const char* label, const char* text, bool secret, uint8_t page, uint8_t cell) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
+
+  // Header: field name, then the page tag right-aligned.
+  gDisplay.setCursor(2, 2);
+  gDisplay.printf("%.15s", label != nullptr ? label : "");
+  using namespace ui::settings::model::keyboard;
+  gDisplay.setCursor(OLED_WIDTH - 2 - 6 * static_cast<int16_t>(strlen(pageLabel(page))), 2);
+  gDisplay.print(pageLabel(page));
+  gDisplay.drawFastHLine(0, 11, OLED_WIDTH, SSD1306_WHITE);
+
+  constexpr int16_t kGridX = 4;
+  constexpr int16_t kGridY = 13;
+  constexpr int16_t kCellW = 12;
+  constexpr int16_t kCellH = 9;
+  for (uint8_t index = 0; index < kCells; ++index) {
+    const Cell key = cellAt(page, index);
+    if (key.action == Action::Empty) continue;
+    int16_t x;
+    int16_t y;
+    int16_t w = kCellW;
+    if (index < kCharCells) {
+      x = kGridX + (index % kCols) * kCellW;
+      y = kGridY + (index / kCols) * kCellH;
+    } else {
+      // SP DEL PG OK sit in a widened row below the grid.
+      constexpr int16_t kKeyW = 30;
+      w = kKeyW;
+      x = static_cast<int16_t>(2 + (index - kCharCells) * (kKeyW + 1));
+      y = 42;
+    }
+    const bool focused = index == cell;
+    if (focused) gDisplay.fillRoundRect(x, y, w, kCellH, 2, SSD1306_WHITE);
+    gDisplay.setTextColor(focused ? SSD1306_BLACK : SSD1306_WHITE);
+    if (index < kCharCells) {
+      gDisplay.setCursor(x + 3, y + 1);
+      gDisplay.print(key.ch);
+    } else {
+      static constexpr const char* kControlLabels[] = {"SP", "DEL", "PG", "OK"};
+      const char* controlLabel = kControlLabels[index - kCharCells];
+      gDisplay.setCursor(x + (w - 6 * static_cast<int16_t>(strlen(controlLabel))) / 2, y + 1);
+      gDisplay.print(controlLabel);
+    }
+  }
+
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.drawFastHLine(0, 53, OLED_WIDTH, SSD1306_WHITE);
+  // Footer: the tail of the value, masked when it is a secret.
+  constexpr uint8_t kFooterChars = 20;
+  const size_t length = text != nullptr ? strlen(text) : 0;
+  const size_t start = length > kFooterChars ? length - kFooterChars : 0;
+  gDisplay.setCursor(2, 56);
+  for (size_t i = start; i < length; ++i) gDisplay.print(secret ? '*' : text[i]);
+  if (length == 0) {
+    gDisplay.setCursor(2, 56);
+    gDisplay.print(secret ? "(type a password)" : "(empty)");
   }
   presentFrame();
 }

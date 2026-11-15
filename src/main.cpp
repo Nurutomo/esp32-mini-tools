@@ -125,7 +125,20 @@ void processSerialCommand(const char* command) {
   if (strncmp(command, "wifi", 4) == 0 && (command[4] == '\0' || command[4] == ' ')) {
     const char* argument = command[4] == '\0' ? command + 4 : command + 5;
     if (command[4] == '\0') {
-      Serial.printf("Wi-Fi: %s, SSID: %s\n", wifiStatusText(), ui::state().values.wifi.ssid);
+      const ui::settings::Values& values = ui::state().values;
+      const WifiCredentials* profile = ui::settings::activeProfile(values);
+      Serial.printf("Wi-Fi: %s, active %u/%u, SSID: %s\n", wifiStatusText(),
+                    values.wifi.count == 0 ? 0 : values.wifi.active + 1, values.wifi.count,
+                    profile->ssid);
+      return;
+    }
+    if (strncmp(argument, "select ", 7) == 0 && argument[7] != '\0') {
+      ui::State& state = ui::editableState();
+      if (ui::settings::selectNetwork(state.values, argument + 7)) {
+        Serial.println("Wi-Fi profile selected; use wifi connect, then wifi save");
+      } else {
+        Serial.println("No profile slot available or invalid SSID");
+      }
       return;
     }
     if (strcmp(argument, "scan") == 0) {
@@ -150,11 +163,12 @@ void processSerialCommand(const char* command) {
       size_t size;
     };
     ui::State& state = ui::editableState();
+    WifiCredentials* profile = ui::settings::activeProfile(state.values);
     const Field fields[] = {
-        {"ssid", state.values.wifi.ssid, sizeof(state.values.wifi.ssid)},
-        {"pass", state.values.wifi.password, sizeof(state.values.wifi.password)},
-        {"id", state.values.wifi.identity, sizeof(state.values.wifi.identity)},
-        {"user", state.values.wifi.username, sizeof(state.values.wifi.username)},
+        {"ssid", profile->ssid, sizeof(profile->ssid)},
+        {"pass", profile->password, sizeof(profile->password)},
+        {"id", profile->identity, sizeof(profile->identity)},
+        {"user", profile->username, sizeof(profile->username)},
     };
     for (const Field& field : fields) {
       const size_t nameLength = strlen(field.name);
@@ -227,6 +241,7 @@ void setup() {
   ui::begin();
 #if defined(USE_WIFI)
   initWifi();
+  wifiAutoConnect(ui::state().values.wifi);
 #endif
   const uint32_t bootStartedMs = millis();
   for (uint8_t note = 0; note < sizeof(kBootMelodyHz) / sizeof(kBootMelodyHz[0]); ++note) {

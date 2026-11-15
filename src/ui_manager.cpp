@@ -22,32 +22,60 @@ uint32_t gButtonTwoDownMs = 0;
 Button gPreviousButton = Button::None;
 bool gButtonTwoLongHandled = false;
 
+void back();
+
 void select() {
   buzzer::beep(2200, 35);
+  if (gState.screen == Screen::Keyboard) {
+    using Action = settings::model::keyboard::Action;
+    const auto cell = settings::model::keyboard::cellAt(gState.keyboardPage, gState.keyboardCell);
+    switch (cell.action) {
+      case Action::Insert: settings::textAppend(gState.values, gState.settingsOption, cell.ch); break;
+      case Action::Space: settings::textAppend(gState.values, gState.settingsOption, ' '); break;
+      case Action::Backspace: settings::textErase(gState.values, gState.settingsOption); break;
+      case Action::Page:
+        gState.keyboardPage = static_cast<uint8_t>((gState.keyboardPage + 1) %
+                                                    settings::model::keyboard::pageCount());
+        gState.keyboardCell = settings::model::keyboard::clampCell(gState.keyboardPage,
+                                                                    gState.keyboardCell);
+        break;
+      case Action::Done: gState.screen = Screen::Settings; break;
+      case Action::Empty: break;
+    }
+    return;
+  }
   if (gState.screen == Screen::Settings) {
     const settings::model::Entry* entry = settings::model::entryAt(gState.settingsOption);
     if (gState.settingsEditing) {
-      if (entry != nullptr && entry->kind == settings::model::Kind::Text &&
-          settings::advanceText(gState.values, gState.settingsOption)) return;
       gState.settingsEditing = false;
+      return;
+    }
+    if (entry != nullptr && entry->kind == settings::model::Kind::Text) {
+      gState.keyboardPage = 0;
+      gState.keyboardCell = 0;
+      gState.screen = Screen::Keyboard;
       return;
     }
     if (entry == nullptr) return;
     if (entry->id == settings::model::Id::Save) {
-      if (!settings::save(gState.values)) buzzer::beep(500, 250);
-      gState.screen = Screen::Menu;
-    } else if (entry->id == settings::model::Id::WifiNetwork) {
+      if (!settings::save(gState.values)) {
+        buzzer::beep(500, 250);
+      } else {
+        gState.screen = Screen::Menu;
+      }
 #if defined(USE_WIFI)
+    } else if (entry->id == settings::model::Id::WifiNetwork) {
       gState.wifiSelectedNetwork = 0;
       startWifiScan();
       gState.screen = Screen::WifiScan;
-#endif
     } else if (entry->id == settings::model::Id::WifiConnect) {
-#if defined(USE_WIFI)
       if (!wifiConnect(gState.values.wifi)) buzzer::beep(500, 250);
+    } else if (entry->id == settings::model::Id::WifiSaved) {
+      settings::cycleProfile(gState.values);
+    } else if (entry->id == settings::model::Id::WifiForget) {
+      if (!settings::forgetActive(gState.values)) buzzer::beep(500, 250);
 #endif
     } else if (settings::model::isEditable(gState.settingsOption)) {
-      settings::resetTextCursor(gState.settingsOption);
       gState.settingsEditing = true;
     }
     return;
@@ -55,8 +83,14 @@ void select() {
 #if defined(USE_WIFI)
   if (gState.screen == Screen::WifiScan) {
     if (const WifiNetwork* network = wifiScanResult(gState.wifiSelectedNetwork)) {
-      strncpy(gState.values.wifi.ssid, network->ssid, sizeof(gState.values.wifi.ssid) - 1);
-      gState.values.wifi.ssid[sizeof(gState.values.wifi.ssid) - 1] = '\0';
+      if (settings::selectNetwork(gState.values, network->ssid)) {
+        const WifiCredentials* profile = settings::activeProfile(gState.values);
+        const auto security = settings::model::classifySsid(profile->ssid);
+        if (settings::model::credentialsComplete(security, profile->password, profile->identity,
+                                                 profile->username)) {
+          if (!wifiConnect(gState.values.wifi)) buzzer::beep(500, 250);
+        }
+      }
     }
     gState.screen = Screen::Settings;
     return;
@@ -79,9 +113,12 @@ void select() {
 
 void back() {
   buzzer::beep(1400, 70);
+  if (gState.screen == Screen::Keyboard) {
+    gState.screen = Screen::Settings;
+    return;
+  }
   if (gState.screen == Screen::Settings) {
     gState.settingsEditing = false;
-    if (!settings::save(gState.values)) buzzer::beep(500, 250);
     gState.screen = Screen::Menu;
     return;
   }
@@ -155,6 +192,11 @@ void update(uint16_t analogValue, uint32_t now) {
       gLastActionMs = now;
     } else if (gState.screen == Screen::Menu && button == Button::Three) {
       menu::moveUp(gState.selectedItem);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::Keyboard &&
+               (button == Button::One || button == Button::Three)) {
+      gState.keyboardCell = settings::model::keyboard::step(
+          gState.keyboardPage, gState.keyboardCell, button == Button::One ? 1 : -1);
       gLastActionMs = now;
     } else if (gState.screen == Screen::Settings &&
                (button == Button::One || button == Button::Three)) {

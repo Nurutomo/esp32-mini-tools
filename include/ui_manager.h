@@ -21,6 +21,7 @@ enum class Screen : uint8_t {
   BluetoothInfo,
   Settings,
   WifiScan,
+  Keyboard,
   DinoGame,
   FlappyBird,
 };
@@ -32,6 +33,8 @@ struct State {
   uint8_t selectedBluetoothDevice = 0;
   uint8_t settingsOption = 0;
   bool settingsEditing = false;
+  uint8_t keyboardPage = 0;
+  uint8_t keyboardCell = 0;
   uint8_t wifiSelectedNetwork = 0;
   settings::Values values;
 };

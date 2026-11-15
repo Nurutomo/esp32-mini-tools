@@ -27,25 +27,31 @@ struct Pins {
 // Everything the settings screen edits, in one persisted record.
 struct Values {
   Pins pins{kDefaultAnalogButtonPin, kDefaultBuzzerPin};
-  WifiCredentials wifi;
+  WifiBook wifi;
 };
 
 void load(Values& values);
 bool save(const Values& values);
 void render(const Values& values, uint8_t selectedOption, bool editing);
 
-// Edit mode: what up/down does to the selected entry.
+// Edit mode: what up/down does to the selected entry. Text entries are typed
+// on the keyboard screen instead, so this ignores them.
 void edit(Values& values, uint8_t selectedOption, int8_t direction, uint8_t maxGpio);
-// Short-select on a Text entry advances the cursor; returns false when the text
-// is finished so the controller can leave edit mode.
-bool advanceText(Values& values, uint8_t selectedOption);
-// Short-select on a Pin/Toggle entry cycles its value once.
-void toggle(Values& values, uint8_t selectedOption, uint8_t maxGpio);
+
+// Text entry, always on the active Wi-Fi profile.
+const char* textValue(const Values& values, uint8_t selectedOption);
+bool textIsSecret(uint8_t selectedOption);
+void textAppend(Values& values, uint8_t selectedOption, char ch);
+void textErase(Values& values, uint8_t selectedOption);
+
+// Saved profiles.
+WifiCredentials* activeProfile(Values& values);
+const WifiCredentials* activeProfile(const Values& values);
+void cycleProfile(Values& values);
+bool selectNetwork(Values& values, const char* ssid);
+bool forgetActive(Values& values);
 
 const char* valueText(const Values& values, uint8_t selectedOption, char* buffer, size_t size);
-const char* editText(const Values& values, uint8_t selectedOption);
-uint8_t textCursor(uint8_t selectedOption);
-void resetTextCursor(uint8_t selectedOption);
 
 bool validAnalogPin(uint8_t pin, uint8_t maxGpio);
 bool validBuzzerPin(uint8_t pin, uint8_t maxGpio, uint8_t analogPin, uint8_t oledSda,
