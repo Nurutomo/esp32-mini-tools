@@ -14,7 +14,7 @@ constexpr char kDeviceName[] = "ESP32-OLED";
 constexpr uint32_t kBlinkDelayMs = 250;
 // Full SSD1306 framebuffer writes over I2C exceed 25 ms at 100 kHz; avoid
 // saturating the loop while navigation and Bluetooth updates are active.
-constexpr uint32_t kDisplayIntervalMs = 100;
+constexpr uint32_t kDisplayIntervalMs = 25;
 constexpr uint8_t kDefaultAnalogInputPin = 0;
 constexpr uint8_t kDefaultBuzzerPin = 10;
 constexpr uint32_t kAnalogReadIntervalMs = 25;
