@@ -6,6 +6,9 @@
 #include "ui/settings.h"
 #include "ui/games.h"
 #include "bluetooth_manager.h"
+#if defined(USE_WIFI)
+#include "wifi_manager.h"
+#endif
 
 namespace ui {
 namespace {
@@ -22,13 +25,43 @@ bool gButtonTwoLongHandled = false;
 void select() {
   buzzer::beep(2200, 35);
   if (gState.screen == Screen::Settings) {
-    if (gState.settingsOption < 2) ++gState.settingsOption;
-    else {
-      if (!settings::save(gState.pins)) buzzer::beep(500, 250);
+    const settings::model::Entry* entry = settings::model::entryAt(gState.settingsOption);
+    if (gState.settingsEditing) {
+      if (entry != nullptr && entry->kind == settings::model::Kind::Text &&
+          settings::advanceText(gState.values, gState.settingsOption)) return;
+      gState.settingsEditing = false;
+      return;
+    }
+    if (entry == nullptr) return;
+    if (entry->id == settings::model::Id::Save) {
+      if (!settings::save(gState.values)) buzzer::beep(500, 250);
       gState.screen = Screen::Menu;
+    } else if (entry->id == settings::model::Id::WifiNetwork) {
+#if defined(USE_WIFI)
+      gState.wifiSelectedNetwork = 0;
+      startWifiScan();
+      gState.screen = Screen::WifiScan;
+#endif
+    } else if (entry->id == settings::model::Id::WifiConnect) {
+#if defined(USE_WIFI)
+      if (!wifiConnect(gState.values.wifi)) buzzer::beep(500, 250);
+#endif
+    } else if (settings::model::isEditable(gState.settingsOption)) {
+      settings::resetTextCursor(gState.settingsOption);
+      gState.settingsEditing = true;
     }
     return;
   }
+#if defined(USE_WIFI)
+  if (gState.screen == Screen::WifiScan) {
+    if (const WifiNetwork* network = wifiScanResult(gState.wifiSelectedNetwork)) {
+      strncpy(gState.values.wifi.ssid, network->ssid, sizeof(gState.values.wifi.ssid) - 1);
+      gState.values.wifi.ssid[sizeof(gState.values.wifi.ssid) - 1] = '\0';
+    }
+    gState.screen = Screen::Settings;
+    return;
+  }
+#endif
   if (gState.screen != Screen::Menu) return;
   const menu::Item* items = menu::items();
   if (gState.selectedItem >= menu::itemCount()) return;
@@ -38,12 +71,27 @@ void select() {
     startBluetoothScan();
   } else if (gState.screen == Screen::DinoGame || gState.screen == Screen::FlappyBird) {
     games::reset(gState.screen);
+  } else if (gState.screen == Screen::Settings) {
+    gState.settingsOption = 0;
+    gState.settingsEditing = false;
   }
 }
 
 void back() {
   buzzer::beep(1400, 70);
-  if (gState.screen == Screen::Settings || gState.screen == Screen::BluetoothInfo) {
+  if (gState.screen == Screen::Settings) {
+    gState.settingsEditing = false;
+    if (!settings::save(gState.values)) buzzer::beep(500, 250);
+    gState.screen = Screen::Menu;
+    return;
+  }
+#if defined(USE_WIFI)
+  if (gState.screen == Screen::WifiScan) {
+    gState.screen = Screen::Settings;
+    return;
+  }
+#endif
+  if (gState.screen == Screen::BluetoothInfo) {
     gState.screen = Screen::Menu;
     return;
   }
@@ -65,9 +113,9 @@ void back() {
 
 void begin() {
   gState = State{};
-  settings::load(gState.pins, settings::kDefaultAnalogButtonPin, settings::kDefaultBuzzerPin);
-  buzzer::begin(gState.pins.buzzer);
-  buzzer::setEnabled(gState.pins.buzzerEnabled);
+  settings::load(gState.values);
+  buzzer::begin(gState.values.pins.buzzer);
+  buzzer::setEnabled(gState.values.pins.buzzerEnabled);
   gLastActionMs = 0;
   gButtonTwoDownMs = 0;
   gPreviousButton = Button::None;
@@ -108,16 +156,31 @@ void update(uint16_t analogValue, uint32_t now) {
     } else if (gState.screen == Screen::Menu && button == Button::Three) {
       menu::moveUp(gState.selectedItem);
       gLastActionMs = now;
-    } else if (gState.screen == Screen::Settings && button == Button::One) {
-      settings::edit(gState.pins, gState.settingsOption, 1, 21);
-      buzzer::setPin(gState.pins.buzzer);
-      buzzer::setEnabled(gState.pins.buzzerEnabled);
+    } else if (gState.screen == Screen::Settings &&
+               (button == Button::One || button == Button::Three)) {
+      const int8_t direction = button == Button::One ? 1 : -1;
+      if (gState.settingsEditing) {
+        settings::edit(gState.values, gState.settingsOption, direction, settings::kMaxGpio);
+        buzzer::setPin(gState.values.pins.buzzer);
+        buzzer::setEnabled(gState.values.pins.buzzerEnabled);
+      } else if (button == Button::One) {
+        gState.settingsOption = settings::model::nextIndex(gState.settingsOption);
+      } else {
+        gState.settingsOption = settings::model::prevIndex(gState.settingsOption);
+      }
       gLastActionMs = now;
-    } else if (gState.screen == Screen::Settings && button == Button::Three) {
-      settings::edit(gState.pins, gState.settingsOption, -1, 21);
-      buzzer::setPin(gState.pins.buzzer);
-      buzzer::setEnabled(gState.pins.buzzerEnabled);
+#if defined(USE_WIFI)
+    } else if (gState.screen == Screen::WifiScan &&
+               (button == Button::One || button == Button::Three)) {
+      const uint8_t count = wifiScanCount();
+      if (count > 0) {
+        if (button == Button::One && gState.wifiSelectedNetwork + 1 < count)
+          ++gState.wifiSelectedNetwork;
+        else if (button == Button::Three && gState.wifiSelectedNetwork > 0)
+          --gState.wifiSelectedNetwork;
+      }
       gLastActionMs = now;
+#endif
     } else if (gState.screen == Screen::Navigation &&
                (button == Button::One || button == Button::Three)) {
       gState.speedFocused = !gState.speedFocused;
@@ -141,16 +204,15 @@ void update(uint16_t analogValue, uint32_t now) {
 }
 
 void setAnalogButtonPin(uint8_t pin) {
-  gState.pins.analogButton = pin;
+  gState.values.pins.analogButton = pin;
 }
 
 void setBuzzerPin(uint8_t pin) {
-  gState.pins.buzzer = pin;
+  gState.values.pins.buzzer = pin;
   buzzer::setPin(pin);
 }
 
-const State& state() {
-  return gState;
-}
+const State& state() { return gState; }
+State& editableState() { return gState; }
 
 }  // namespace ui

@@ -518,24 +518,60 @@ void begin() {
   presentFrame();
 }
 
-void settings(const ui::settings::Pins& pins, uint8_t selectedOption) {
+void settings(const ui::settings::Values& values, uint8_t selectedOption, bool editing) {
   if (!gDisplayReady) return;
   prepareForI2C();
   gDisplay.clearDisplay();
   gDisplay.setTextColor(SSD1306_WHITE);
   gDisplay.setTextSize(1);
+  gDisplay.setTextWrap(false);
   gDisplay.setCursor(2, 2);
-  gDisplay.print("Pin settings");
-  gDisplay.drawFastHLine(0, 12, OLED_WIDTH, SSD1306_WHITE);
-  gDisplay.setCursor(2, 23);
-  gDisplay.printf("%c Buttons GPIO %u", selectedOption == 0 ? '>' : ' ', pins.analogButton);
-  gDisplay.setCursor(2, 35);
-  gDisplay.printf("%c Buzzer GPIO %u", selectedOption == 1 ? '>' : ' ', pins.buzzer);
-  gDisplay.setCursor(2, 47);
-  gDisplay.printf("%c Buzzer %s", selectedOption == 2 ? '>' : ' ',
-                  pins.buzzerEnabled ? "ON" : "OFF");
-  gDisplay.setCursor(2, 58);
-  gDisplay.print("1/3 Change  2 Save");
+  gDisplay.print("Settings");
+  gDisplay.drawFastHLine(0, 11, OLED_WIDTH, SSD1306_WHITE);
+
+  uint8_t count = 0;
+  const ui::settings::model::Entry* items = ui::settings::model::entries(count);
+  constexpr uint8_t kVisibleItems = 4;
+  const uint8_t first = selectedOption >= kVisibleItems ? selectedOption - kVisibleItems + 1 : 0;
+  for (uint8_t row = 0; row < kVisibleItems && first + row < count; ++row) {
+    const uint8_t index = first + row;
+    const int16_t y = 14 + row * 10;
+    if (index == selectedOption) {
+      gDisplay.fillRoundRect(0, y - 1, OLED_WIDTH, 10, 2, SSD1306_WHITE);
+      gDisplay.setTextColor(SSD1306_BLACK);
+    } else {
+      gDisplay.setTextColor(SSD1306_WHITE);
+    }
+    gDisplay.setCursor(3, y);
+    gDisplay.print(items[index].label);
+  }
+
+  // Value line: the current selection's value, in angle brackets while editing.
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.drawFastHLine(0, 53, OLED_WIDTH, SSD1306_WHITE);
+  char buffer[40];
+  const char* value = ui::settings::valueText(values, selectedOption, buffer, sizeof(buffer));
+  const char* shown = value;
+  const char* editText = editing ? ui::settings::editText(values, selectedOption) : nullptr;
+  uint8_t caret = 0;
+  if (editText != nullptr) {
+    // Show the real characters while typing a secret, otherwise it is untypeable.
+    constexpr uint8_t kWindow = 17;
+    const uint8_t position = ui::settings::textCursor(selectedOption);
+    const uint8_t start = position > kWindow ? position - kWindow : 0;
+    caret = position - start;
+    shown = editText + (start < strlen(editText) ? start : strlen(editText));
+    snprintf(buffer, sizeof(buffer), "%s", shown);
+    shown = buffer;
+  }
+  gDisplay.setCursor(2, 56);
+  if (editing) gDisplay.print('<');
+  gDisplay.printf("%.18s", shown);
+  if (editing) gDisplay.print('>');
+  if (editText != nullptr) {
+    // Caret under the character being cycled.
+    gDisplay.fillRect(9 + caret * 6, 63, 5, 1, SSD1306_WHITE);
+  }
   presentFrame();
 }
 
@@ -603,6 +639,39 @@ void text(const char* title, const char* body, const BluetoothDeviceInfo* device
   }
   presentFrame();
 }
+
+#if defined(USE_WIFI)
+void wifiScan(uint8_t selected, const WifiNetwork* networks, uint8_t count, bool scanning) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(2, 3);
+  gDisplay.print(scanning ? "Wi-Fi scan..." : "Wi-Fi networks");
+  gDisplay.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+  if (count == 0) {
+    gDisplay.setCursor(2, 26);
+    gDisplay.print(scanning ? "Searching..." : "No networks");
+  } else {
+    const uint8_t first = selected > 3 ? selected - 3 : 0;
+    for (uint8_t row = 0; row < 4 && first + row < count; ++row) {
+      const uint8_t index = first + row;
+      const int16_t y = 18 + row * 9;
+      if (index == selected) {
+        gDisplay.fillRoundRect(1, y - 1, OLED_WIDTH - 2, 9, 2, SSD1306_WHITE);
+        gDisplay.setTextColor(SSD1306_BLACK);
+      } else gDisplay.setTextColor(SSD1306_WHITE);
+      gDisplay.setCursor(4, y);
+      gDisplay.printf("%.14s %d", networks[index].ssid, networks[index].rssi);
+    }
+  }
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setCursor(2, 57);
+  gDisplay.print("1/3 Scroll  2 Select");
+  presentFrame();
+}
+#endif
 
 void menu(uint8_t selectedItem, const char* const* items, uint8_t itemCount) {
   if (!gDisplayReady) return;
