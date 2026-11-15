@@ -20,6 +20,8 @@ enum class Screen : uint8_t {
   About,
   BluetoothInfo,
   Settings,
+  DinoGame,
+  FlappyBird,
 };
 
 struct State {

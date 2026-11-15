@@ -22,6 +22,9 @@ void updateDisplay(const char* statusText, const char* btMessage, uint32_t cycle
 void renderNavHud(const NavigationData& nav, bool speedFocused = false);
 void renderStatusScreen(const char* statusText, const char* btMessage, int speed, uint32_t cycle);
 
+// Mini game field (Dino Run / Flappy Bird)
+void renderGameFrame(bool flappy, int16_t playerY, int16_t obstacleX, uint32_t score, bool gameOver);
+
 // Backlight and invert effects
 void flashBacklight();
 void setDisplayInverted(bool invert);

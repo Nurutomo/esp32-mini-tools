@@ -12,6 +12,8 @@ constexpr Item kItems[] = {
     {"About", 3},
     {"Bluetooth info", 4},
     {"Settings", 5},
+    {"Dino Run", 6},
+    {"Flappy Bird", 7},
 };
 
 }  // namespace

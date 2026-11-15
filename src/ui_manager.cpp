@@ -4,6 +4,7 @@
 #include "ui/menu.h"
 #include "ui/buzzer.h"
 #include "ui/settings.h"
+#include "ui/games.h"
 #include "bluetooth_manager.h"
 
 namespace ui {
@@ -35,6 +36,8 @@ void select() {
   if (gState.screen == Screen::BluetoothInfo) {
     gState.selectedBluetoothDevice = 0;
     startBluetoothScan();
+  } else if (gState.screen == Screen::DinoGame || gState.screen == Screen::FlappyBird) {
+    games::reset(gState.screen);
   }
 }
 
@@ -48,6 +51,8 @@ void back() {
     case Screen::Navigation:
     case Screen::ButtonMonitor:
     case Screen::About:
+    case Screen::DinoGame:
+    case Screen::FlappyBird:
       gState.screen = Screen::Menu;
       break;
     default:
@@ -86,7 +91,11 @@ void update(uint16_t analogValue, uint32_t now) {
 
   if (gPreviousButton == Button::Two && button != Button::Two) {
     if (!gButtonTwoLongHandled && now - gLastActionMs >= kButtonDebounceMs) {
-      select();
+      if (gState.screen == Screen::DinoGame || gState.screen == Screen::FlappyBird) {
+        games::jump(gState.screen);
+      } else {
+        select();
+      }
       gLastActionMs = now;
     }
     gButtonTwoLongHandled = false;

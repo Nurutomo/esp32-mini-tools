@@ -7,6 +7,7 @@
 #include "ui/display.h"
 #include "ui/navigation.h"
 #include "ui/settings.h"
+#include "ui/games.h"
 #include "bluetooth_manager.h"
 
 namespace ui {
@@ -31,6 +32,10 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
     }
     case Screen::Settings:
       settings::render(current.pins, current.settingsOption);
+      break;
+    case Screen::DinoGame:
+    case Screen::FlappyBird:
+      games::render(current.screen);
       break;
     case Screen::Navigation:
       if (isNavigationActive()) navigation::render(getNavigationData(), current.speedFocused);
