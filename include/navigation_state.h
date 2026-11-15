@@ -49,9 +49,6 @@ struct NavigationData {
 // Access the global navigation state
 NavigationData& getNavigationData();
 
-// Parse incoming JSON payload (returns true if valid navigation/speed JSON)
-bool processNavigationJson(const char* payload, size_t len);
-
 // Parse incoming compact binary navigation frame (returns true if valid)
 bool processNavigationBinary(const uint8_t* payload, size_t len);
 

@@ -36,7 +36,8 @@ PacketReceivedCallback gpPacketCallback = nullptr;
 
 // Shared receive buffer for both transports. BLE writes land here from the
 // NimBLE host task, so every access is guarded by gBtMux.
-constexpr size_t kRxCapacity = kMaxPacketBytes * 2;
+// A single maximum-sized frame is sufficient; overflow drops the entire write.
+constexpr size_t kRxCapacity = kMaxPacketBytes + kNavBinHeaderSize;
 uint8_t gRxBuf[kRxCapacity];
 size_t gRxLen = 0;
 uint32_t gLastRxMs = 0;
@@ -46,11 +47,14 @@ void appendRxBytes(const uint8_t* data, size_t len) {
   portENTER_CRITICAL(&gBtMux);
   if (gRxLen > 0 && (millis() - gLastRxMs > 500)) gRxLen = 0;
   gLastRxMs = millis();
-  const size_t room = kRxCapacity - gRxLen;
-  const size_t count = len < room ? len : room;
-  if (count < len) gRxLen = 0;  // overflow: drop the partial frame
-  memcpy(gRxBuf + gRxLen, data, count);
-  gRxLen += count;
+  if (len > kRxCapacity - gRxLen) {
+    // Never retain a truncated frame header/prefix; drop this write and reset.
+    gRxLen = 0;
+    portEXIT_CRITICAL(&gBtMux);
+    return;
+  }
+  memcpy(gRxBuf + gRxLen, data, len);
+  gRxLen += len;
   portEXIT_CRITICAL(&gBtMux);
 }
 
@@ -110,16 +114,10 @@ class ServerCallbacks final : public NimBLEServerCallbacks {
   }
 };
 
-void handleBleRxBytes(const uint8_t* data, size_t len) {
-  appendRxBytes(data, len);
-}
-
 class TextCallbacks final : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& /* connInfo */) override {
-    std::string val = characteristic->getValue();
-    if (!val.empty()) {
-      handleBleRxBytes(reinterpret_cast<const uint8_t*>(val.data()), val.size());
-    }
+    const std::string& value = characteristic->getValue();
+    if (!value.empty()) appendRxBytes(reinterpret_cast<const uint8_t*>(value.data()), value.size());
   }
 };
 #endif
@@ -190,7 +188,8 @@ void updateBluetooth() {
   if (count > 0) appendRxBytes(incoming, count);
 #endif
 
-  for (;;) {
+  // Process at most one frame per loop turn so display and input stay serviced.
+  {
     uint8_t packet[kMaxPacketBytes + 1];
     size_t packetLen = 0;
     bool binary = false;
@@ -211,7 +210,12 @@ void updateBluetooth() {
           memmove(gRxBuf, gRxBuf + packetLen, gRxLen - packetLen);
           gRxLen -= packetLen;
           binary = true;
+        } else if (now - gLastRxMs >= 500) {
+          // Incomplete frame timed out; drop it instead of pinning later writes.
+          gRxLen = 0;
         }
+      } else if (now - gLastRxMs >= 500) {
+        gRxLen = 0;
       }
     } else if (gRxLen > 0) {
       size_t start = 0;
@@ -234,14 +238,14 @@ void updateBluetooth() {
     }
     portEXIT_CRITICAL(&gBtMux);
 
-    if (packetLen == 0) break;
+    if (packetLen == 0) return;
     if (binary) {
       dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
-      continue;
+      return;
     }
     while (packetLen > 0 && (packet[packetLen - 1] == '\r' || packet[packetLen - 1] == ' ')) --packetLen;
     packet[packetLen] = '\0';
-    if (packetLen == 0) continue;
+    if (packetLen == 0) return;
     dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
     gClassicSerial.print("OK\r\n");

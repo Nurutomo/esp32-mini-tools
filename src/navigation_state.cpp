@@ -1,6 +1,4 @@
 #include "navigation_state.h"
-#include <ArduinoJson.h>
-#include <mbedtls/base64.h>
 #include <string.h>
 
 namespace {
@@ -155,102 +153,6 @@ NavigationData& getNavigationData() {
   return gNavData;
 }
 
-bool processNavigationJson(const char* payload, size_t len) {
-  if (len == 0 || payload == nullptr) return false;
-
-  // Quick sanity check for JSON object
-  if (payload[0] != '{') return false;
-
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, payload, len);
-  if (err) return false;
-
-  bool recognized = false;
-  gNavData.lastUpdateMs = millis();
-
-  // 1. Navigation block
-  if (doc["navigation"].is<JsonObject>()) {
-    JsonObject nav = doc["navigation"];
-    recognized = true;
-
-    const char* road = nav["next_road"] | "";
-    const char* sub = nav["next_road_sub"] | "";
-    const char* dist = nav["next_road_distance"] | "";
-    const char* eta = nav["eta"] | "";
-    const char* ete = nav["ete"] | "";
-    const char* totDist = nav["distance"] | "";
-    const char* iconB64 = nav["icon"] | "";
-
-    // Trigger flash indicator if maneuver or road changes
-    if (strlen(road) > 0 && strcmp(gNavData.nextRoad, road) != 0) {
-      gNavData.newTurnManeuver = true;
-    }
-
-    strncpy(gNavData.nextRoad, road, sizeof(gNavData.nextRoad) - 1);
-    gNavData.nextRoad[sizeof(gNavData.nextRoad) - 1] = '\0';
-
-    strncpy(gNavData.nextRoadSub, sub, sizeof(gNavData.nextRoadSub) - 1);
-    gNavData.nextRoadSub[sizeof(gNavData.nextRoadSub) - 1] = '\0';
-
-    strncpy(gNavData.distance, dist, sizeof(gNavData.distance) - 1);
-    gNavData.distance[sizeof(gNavData.distance) - 1] = '\0';
-
-    strncpy(gNavData.eta, eta, sizeof(gNavData.eta) - 1);
-    gNavData.eta[sizeof(gNavData.eta) - 1] = '\0';
-
-    strncpy(gNavData.ete, ete, sizeof(gNavData.ete) - 1);
-    gNavData.ete[sizeof(gNavData.ete) - 1] = '\0';
-
-    strncpy(gNavData.totalDistance, totDist, sizeof(gNavData.totalDistance) - 1);
-    gNavData.totalDistance[sizeof(gNavData.totalDistance) - 1] = '\0';
-
-    if (strlen(iconB64) > 0) {
-      size_t olen = 0;
-      int ret = mbedtls_base64_decode(gNavData.iconBitmap, sizeof(gNavData.iconBitmap),
-                                      &olen, (const unsigned char*)iconB64, strlen(iconB64));
-      gNavData.hasIcon = (ret == 0 && olen == sizeof(gNavData.iconBitmap));
-    } else {
-      gNavData.hasIcon = false;
-    }
-
-    gNavData.active = (strlen(gNavData.nextRoad) > 0 || strlen(gNavData.distance) > 0);
-  }
-
-  // 2. Speed telemetry from GPS
-  if (doc["speed"].is<int>()) {
-    gNavData.speed = doc["speed"].as<int>();
-    recognized = true;
-  }
-
-  // 3. User preferences
-  if (doc["preferences"].is<JsonObject>()) {
-    JsonObject prefs = doc["preferences"];
-    if (prefs["display_backlight"].is<bool>()) {
-      gNavData.displayBacklight = prefs["display_backlight"].as<bool>();
-    }
-    if (prefs["speed_limit"].is<int>()) {
-      gNavData.speedLimit = prefs["speed_limit"].as<int>();
-    }
-    recognized = true;
-  }
-
-  // 4. Phone clock sync — Unix epoch seconds (UTC) + timezone offset
-  if (doc["ts"].is<uint64_t>() || doc["ts"].is<long>()) {
-    const uint64_t ts = doc["ts"].as<uint64_t>();
-    if (ts > 1000000000ULL) {  // sanity: must be after year 2001
-      gClockEpochSec = ts;
-      gClockSyncMs   = millis();
-      gClockSynced   = true;
-      recognized = true;
-    }
-  }
-  if (doc["tz_offset"].is<int>()) {
-    gClockTzOffsetSec = doc["tz_offset"].as<int>();
-  }
-
-  return recognized;
-}
-
 bool processNavigationBinary(const uint8_t* frame, size_t len) {
   if (frame == nullptr || len < kNavBinHeaderSize || frame[0] != kNavBinMagic0 ||
       frame[1] != kNavBinMagic1) return false;
@@ -272,7 +174,8 @@ bool processNavigationBinary(const uint8_t* frame, size_t len) {
 }
 
 static bool applyNavigationPayload(const uint8_t* payload, size_t payloadLen) {
-  if (payload == nullptr || payloadLen < 12) return false;
+  // Fixed header + six one-byte string lengths; validate before reading any field.
+  if (payload == nullptr || payloadLen < 18 || payloadLen > kNavBinMaxContent) return false;
 
   const uint8_t* p = payload;
   const uint8_t* end = payload + payloadLen;
@@ -281,16 +184,24 @@ static bool applyNavigationPayload(const uint8_t* payload, size_t payloadLen) {
   const uint8_t speedLimit = *p++;
   const uint32_t epoch = readU32Le(p); p += 4;
   const int32_t tzOffset = static_cast<int32_t>(readU32Le(p)); p += 4;
+  if (p > end) return false;
 
-  char road[sizeof(gNavData.nextRoad)];
-  char sub[sizeof(gNavData.nextRoadSub)];
-  char distance[sizeof(gNavData.distance)];
-  char eta[sizeof(gNavData.eta)];
-  char ete[sizeof(gNavData.ete)];
-  char totalDistance[sizeof(gNavData.totalDistance)];
-  if (!readField(road, sizeof(road), &p, end) || !readField(sub, sizeof(sub), &p, end) ||
-      !readField(distance, sizeof(distance), &p, end) || !readField(eta, sizeof(eta), &p, end) ||
-      !readField(ete, sizeof(ete), &p, end) || !readField(totalDistance, sizeof(totalDistance), &p, end)) return false;
+  // One bounded scratch region replaces six simultaneous field arrays.
+  char fields[sizeof(gNavData.nextRoad) + sizeof(gNavData.nextRoadSub) +
+              sizeof(gNavData.distance) + sizeof(gNavData.eta) +
+              sizeof(gNavData.ete) + sizeof(gNavData.totalDistance)];
+  char* road = fields;
+  char* sub = road + sizeof(gNavData.nextRoad);
+  char* distance = sub + sizeof(gNavData.nextRoadSub);
+  char* eta = distance + sizeof(gNavData.distance);
+  char* ete = eta + sizeof(gNavData.eta);
+  char* totalDistance = ete + sizeof(gNavData.ete);
+  if (!readField(road, sizeof(gNavData.nextRoad), &p, end) ||
+      !readField(sub, sizeof(gNavData.nextRoadSub), &p, end) ||
+      !readField(distance, sizeof(gNavData.distance), &p, end) ||
+      !readField(eta, sizeof(gNavData.eta), &p, end) ||
+      !readField(ete, sizeof(gNavData.ete), &p, end) ||
+      !readField(totalDistance, sizeof(gNavData.totalDistance), &p, end)) return false;
 
   const bool hasIcon = (flags & 0x02) != 0;
   if (hasIcon) {
