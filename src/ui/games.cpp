@@ -6,7 +6,8 @@
 
 namespace ui::games {
 namespace {
-constexpr uint32_t kFrameMs = 55;
+constexpr uint32_t kFrameMs = physics::kTickMs;  // match the 25 ms display cadence
+constexpr uint32_t kMaxCatchUpTicks = 4;
 
 physics::State gState;
 Screen gGame = Screen::DinoGame;
@@ -17,8 +18,13 @@ bool isDino() { return gGame == Screen::DinoGame; }
 void update(uint32_t now) {
   if (now - gLastFrameMs < kFrameMs) return;
   // Advance whole ticks only; a slow I2C frame must not warp the physics.
-  const uint32_t ticks = (now - gLastFrameMs) / kFrameMs;
-  gLastFrameMs += ticks * kFrameMs;
+  uint32_t ticks = (now - gLastFrameMs) / kFrameMs;
+  if (ticks > kMaxCatchUpTicks) {
+    ticks = kMaxCatchUpTicks;
+    gLastFrameMs = now;  // drop backlog instead of replaying a huge burst
+  } else {
+    gLastFrameMs += ticks * kFrameMs;
+  }
   physics::advance(gState, ticks);
 }
 }  // namespace

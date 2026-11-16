@@ -7,13 +7,14 @@ namespace menu {
 namespace {
 
 constexpr Item kItems[] = {
-    {"Navigation", 0},
-    {"Button monitor", 2},
-    {"About", 3},
-    {"Bluetooth info", 4},
-    {"Settings", 5},
-    {"Dino Run", 7},
-    {"Flappy Bird", 8},
+    {"Navigation", Screen::Navigation},
+    {"Button monitor", Screen::ButtonMonitor},
+    {"About", Screen::About},
+    {"Bluetooth info", Screen::BluetoothInfo},
+    {"Settings", Screen::Settings},
+    {"Dino Run", Screen::DinoGame},
+    {"Flappy Bird", Screen::FlappyBird},
+    {"Insta360 remote", Screen::Insta360Remote},
 };
 
 }  // namespace

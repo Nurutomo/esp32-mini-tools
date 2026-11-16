@@ -1,5 +1,6 @@
 #include "bluetooth_manager.h"
 #include "navigation_state.h"
+#include "ui/x3_remote_protocol.h"
 #include <string.h>
 #include <string>
 
@@ -19,11 +20,18 @@ constexpr char kNordicTxUuid[]      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"; //
 // Legacy custom UUIDs for backwards compatibility
 constexpr char kLegacyServiceUuid[] = "8b5d0001-6e8f-4c2a-9b73-6d414c454001";
 constexpr char kLegacyCharUuid[]    = "8b5d0002-6e8f-4c2a-9b73-6d414c454001";
+constexpr char kX3ServiceUuid[] = "CE80";
+constexpr char kX3RxUuid[] = "CE81";
+constexpr char kX3TxUuid[] = "CE82";
+constexpr char kX3InfoUuid[] = "CE83";
+constexpr uint8_t kX3Info[] = {0x02, 0x01};
+
 
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
 BluetoothSerial gClassicSerial;
 #else
 NimBLECharacteristic* gpTxCharacteristic = nullptr;
+NimBLECharacteristic* gpX3TxCharacteristic = nullptr;
 NimBLEScan* gpScanner = nullptr;
 BluetoothDeviceInfo gNearbyDevices[kMaxNearbyBluetoothDevices]{};
 uint8_t gNearbyDeviceCount = 0;
@@ -175,14 +183,29 @@ void initBluetooth(const char* deviceName, PacketReceivedCallback onPacket) {
   legacyChar->setCallbacks(&textCallbacks);
   legacyChar->setValue("Ready");
 
+  // 3. Insta360 X3 GPS-remote emulation. The camera is the BLE central.
+  NimBLEService* x3Service = server->createService(kX3ServiceUuid);
+  x3Service->createCharacteristic(kX3RxUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  gpX3TxCharacteristic = x3Service->createCharacteristic(
+      kX3TxUuid, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ);
+  gpX3TxCharacteristic->setValue(static_cast<uint8_t>(0));
+  x3Service->createCharacteristic(kX3InfoUuid, NIMBLE_PROPERTY::READ)
+      ->setValue(kX3Info, sizeof(kX3Info));
+
+  // ponytail: omit the reference beacon until a valid short manufacturer
+  // payload is verified; its 30-byte data cannot fit legacy advertising with
+  // flags, services, and the existing NUS discovery layout.
+
   server->start();
 
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->enableScanResponse(true);
   advertising->setName(deviceName);
-  advertising->addServiceUUID(kNordicServiceUuid);
+  advertising->addServiceUUID(kNordicServiceUuid); // preserve Android app's advertisement contract
+  // CE80 is discoverable through GATT after the camera connects; advertising it
+  // alongside the 128-bit NUS UUID can overflow the legacy 31-byte payload.
   bool advStarted = advertising->start();
-  Serial.printf("[BLE] Advertised as '%s' (%s)\n  NUS Service: %s\n",
+  Serial.printf("[BLE] Advertised as '%s' (%s)\n  NUS: %s; X3 service available after connection\n",
                 deviceName, advStarted ? "STARTED" : "FAILED", kNordicServiceUuid);
 #endif
 }
@@ -263,6 +286,28 @@ void updateBluetooth() {
     sendBluetoothResponse("OK\r\n");
 #endif
   }
+}
+
+bool sendX3Action(X3Action action) {
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+  (void)action;
+  return false;
+#else
+  if (gpX3TxCharacteristic == nullptr || !gConnected) return false;
+  const auto x3Action = static_cast<ui::x3remote::Action>(action);
+  if (!ui::x3remote::validAction(x3Action)) return false;
+  uint8_t frame[ui::x3remote::kFrameSize];
+  ui::x3remote::encode(x3Action, frame);
+  return gpX3TxCharacteristic->notify(frame, sizeof(frame));
+#endif
+}
+
+const char* getX3RemoteStatus() {
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+  return "BLE unavailable";
+#else
+  return gConnected ? "BLE client connected" : "BLE advertising";
+#endif
 }
 
 void startBluetoothScan() {

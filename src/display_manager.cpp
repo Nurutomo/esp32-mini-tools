@@ -721,6 +721,26 @@ void wifiScan(uint8_t selected, const WifiNetwork* networks, uint8_t count, bool
 }
 #endif
 
+void x3Remote(const char* status) {
+  if (!gDisplayReady) return;
+  prepareForI2C();
+  gDisplay.clearDisplay();
+  gDisplay.setTextColor(SSD1306_WHITE);
+  gDisplay.setTextSize(1);
+  gDisplay.setCursor(2, 3);
+  gDisplay.print("Insta360 remote");
+  gDisplay.drawFastHLine(0, 14, OLED_WIDTH, SSD1306_WHITE);
+  gDisplay.setCursor(2, 24);
+  gDisplay.print(status);
+  gDisplay.setCursor(2, 40);
+  gDisplay.print("Btn1 Mode");
+  gDisplay.setCursor(2, 50);
+  gDisplay.print("Btn2 Shutter");
+  gDisplay.setCursor(2, 58);
+  gDisplay.print("Hold Btn2 Back");
+  presentFrame();
+}
+
 void menu(uint8_t selectedItem, const char* const* items, uint8_t itemCount) {
   if (!gDisplayReady) return;
   prepareForI2C();

@@ -1,13 +1,14 @@
 #pragma once
 
 #include <stdint.h>
+#include "ui_manager.h"
 
 namespace ui {
 namespace menu {
 
 struct Item {
   const char* label;
-  uint8_t screen;
+  Screen screen;
 };
 
 const Item* items();

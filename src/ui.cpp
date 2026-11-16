@@ -55,6 +55,9 @@ void renderScreen(const State& current, uint16_t adc, uint8_t pin, const char* s
     case Screen::FlappyBird:
       games::render(current.screen);
       break;
+    case Screen::Insta360Remote:
+      display::x3Remote(getX3RemoteStatus());
+      break;
     case Screen::Navigation:
       if (isNavigationActive()) navigation::render(getNavigationData(), current.speedFocused);
       else navigation::renderStatus(status, message, speed, cycle);

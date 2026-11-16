@@ -32,3 +32,9 @@ void setLastTextMessage(const char* msg, size_t len);
 
 // Send text response back to connected client
 bool sendBluetoothResponse(const char* text);
+
+// Insta360 X3 GPS-remote emulation (BLE builds only). The camera connects to
+// this peripheral and subscribes to CE82; actions are event-driven only.
+enum class X3Action : uint8_t { ScreenToggle = 0x00, Mode = 0x01, Shutter = 0x02 };
+bool sendX3Action(X3Action action);
+const char* getX3RemoteStatus();

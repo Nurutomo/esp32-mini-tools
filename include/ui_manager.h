@@ -24,6 +24,7 @@ enum class Screen : uint8_t {
   Keyboard,
   DinoGame,
   FlappyBird,
+  Insta360Remote,
 };
 
 struct State {

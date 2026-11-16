@@ -25,6 +25,11 @@ bool gButtonTwoLongHandled = false;
 void back();
 
 void select() {
+  if (gState.screen == Screen::Insta360Remote) {
+    buzzer::beep(2200, 35);
+    if (!sendX3Action(X3Action::Shutter)) buzzer::beep(500, 250);
+    return;
+  }
   buzzer::beep(2200, 35);
   if (gState.screen == Screen::Keyboard) {
     using Action = settings::model::keyboard::Action;
@@ -99,7 +104,7 @@ void select() {
   if (gState.screen != Screen::Menu) return;
   const menu::Item* items = menu::items();
   if (gState.selectedItem >= menu::itemCount()) return;
-  gState.screen = static_cast<Screen>(items[gState.selectedItem].screen);
+  gState.screen = items[gState.selectedItem].screen;
   if (gState.screen == Screen::BluetoothInfo) {
     gState.selectedBluetoothDevice = 0;
     startBluetoothScan();
@@ -138,6 +143,7 @@ void back() {
     case Screen::About:
     case Screen::DinoGame:
     case Screen::FlappyBird:
+    case Screen::Insta360Remote:
       gState.screen = Screen::Menu;
       break;
     default:
@@ -192,6 +198,10 @@ void update(uint16_t analogValue, uint32_t now) {
       gLastActionMs = now;
     } else if (gState.screen == Screen::Menu && button == Button::Three) {
       menu::moveUp(gState.selectedItem);
+      gLastActionMs = now;
+    } else if (gState.screen == Screen::Insta360Remote && button == Button::One &&
+               gPreviousButton != Button::One) {
+      if (!sendX3Action(X3Action::Mode)) buzzer::beep(500, 250);
       gLastActionMs = now;
     } else if (gState.screen == Screen::Keyboard &&
                (button == Button::One || button == Button::Three)) {
