@@ -50,12 +50,29 @@ uint8_t gRxBuf[kRxCapacity];
 size_t gRxLen = 0;
 uint32_t gLastRxMs = 0;
 
+// BLE callbacks run on NimBLE's host task, while the Arduino loop renders the
+// OLED. Queue complete frames so navigation state is only changed by loop().
+constexpr uint8_t kPendingPacketCount = 2;
+struct PendingPacket {
+  uint16_t len = 0;
+  bool binary = false;
+  uint8_t data[kMaxPacketBytes + 1]{};
+};
+PendingPacket gPendingPackets[kPendingPacketCount];
+uint8_t gPendingHead = 0;
+uint8_t gPendingCount = 0;
+portMUX_TYPE gPendingMux = portMUX_INITIALIZER_UNLOCKED;
+
 // Drop any partially received frame. A disconnect mid-frame must not let the
 // next connection's first bytes complete the previous connection's frame.
 void resetRxBuffer() {
   portENTER_CRITICAL(&gBtMux);
   gRxLen = 0;
   portEXIT_CRITICAL(&gBtMux);
+  portENTER_CRITICAL(&gPendingMux);
+  gPendingHead = 0;
+  gPendingCount = 0;
+  portEXIT_CRITICAL(&gPendingMux);
 }
 
 void appendRxBytes(const uint8_t* data, size_t len) {
@@ -74,10 +91,35 @@ void appendRxBytes(const uint8_t* data, size_t len) {
   portEXIT_CRITICAL(&gBtMux);
 }
 
-void dispatchPacket(const char* packet, size_t len) {
-  if (gpPacketCallback != nullptr) {
-    gpPacketCallback(packet, len);
+void dispatchPacket(const char* packet, size_t len, bool binary) {
+  if (packet == nullptr || len == 0 || len > kMaxPacketBytes) return;
+  portENTER_CRITICAL(&gPendingMux);
+  if (gPendingCount < kPendingPacketCount) {
+    const uint8_t tail = static_cast<uint8_t>((gPendingHead + gPendingCount) % kPendingPacketCount);
+    PendingPacket& pending = gPendingPackets[tail];
+    memcpy(pending.data, packet, len);
+    pending.data[len] = '\0';
+    pending.len = static_cast<uint16_t>(len);
+    pending.binary = binary;
+    ++gPendingCount;
   }
+  portEXIT_CRITICAL(&gPendingMux);
+}
+
+bool popPendingPacket(PendingPacket& packet) {
+  bool available = false;
+  portENTER_CRITICAL(&gPendingMux);
+  if (gPendingCount > 0) {
+    const PendingPacket& pending = gPendingPackets[gPendingHead];
+    packet.len = pending.len;
+    packet.binary = pending.binary;
+    memcpy(packet.data, pending.data, pending.len + (pending.binary ? 0 : 1));
+    gPendingHead = static_cast<uint8_t>((gPendingHead + 1) % kPendingPacketCount);
+    --gPendingCount;
+    available = true;
+  }
+  portEXIT_CRITICAL(&gPendingMux);
+  return available;
 }
 
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
@@ -211,6 +253,33 @@ void initBluetooth(const char* deviceName, PacketReceivedCallback onPacket) {
 }
 
 void updateBluetooth() {
+  // Drain a queued frame first. Packet callbacks run on this loop task, never
+  // concurrently with UI/display reads of NavigationData.
+  {
+    PendingPacket pending;
+    if (popPendingPacket(pending)) {
+      if (pending.binary) {
+        if (gpPacketCallback != nullptr) {
+          gpPacketCallback(reinterpret_cast<const char*>(pending.data), pending.len);
+        }
+      } else {
+        size_t textLen = pending.len;
+        while (textLen > 0 && (pending.data[textLen - 1] == '\r' || pending.data[textLen - 1] == ' ')) --textLen;
+        if (textLen > 0) {
+          pending.data[textLen] = '\0';
+          if (gpPacketCallback != nullptr) {
+            gpPacketCallback(reinterpret_cast<const char*>(pending.data), textLen);
+          }
+#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
+          gClassicSerial.print("OK\r\n");
+#else
+          sendBluetoothResponse("OK\r\n");
+#endif
+        }
+      }
+      return;
+    }
+  }
 #if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
   uint8_t incoming[128];
   size_t count = 0;
@@ -273,18 +342,12 @@ void updateBluetooth() {
 
     if (packetLen == 0) return;
     if (binary) {
-      dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
+      dispatchPacket(reinterpret_cast<const char*>(packet), packetLen, true);
       return;
     }
     while (packetLen > 0 && (packet[packetLen - 1] == '\r' || packet[packetLen - 1] == ' ')) --packetLen;
-    packet[packetLen] = '\0';
     if (packetLen == 0) return;
-    dispatchPacket(reinterpret_cast<const char*>(packet), packetLen);
-#if defined(USE_CLASSIC_BT) && defined(CONFIG_IDF_TARGET_ESP32)
-    gClassicSerial.print("OK\r\n");
-#else
-    sendBluetoothResponse("OK\r\n");
-#endif
+    dispatchPacket(reinterpret_cast<const char*>(packet), packetLen, false);
   }
 }
 
